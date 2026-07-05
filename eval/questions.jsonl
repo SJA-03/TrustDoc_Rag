@@ -1,0 +1,5 @@
+{"id":"q1","query":"What are the four necessary conditions for deadlock?","answers":[{"file":"2026-OS-L8-Deadlocks.pdf","page":6},{"file":"2026-OS-L8-Deadlocks.pdf","page":17}]}
+{"id":"q2","query":"deadlock prevention에서 네 가지 necessary conditions는 무엇인가?","answers":[{"file":"2026-OS-L8-Deadlocks.pdf","page":17},{"file":"2026-OS-L8-Deadlocks.pdf","page":18}]}
+{"id":"q3","query":"Lock ordering prevents deadlock by eliminating what condition?","answers":[{"file":"2026-OS-L8B-Deadlocks.pdf","page":2},{"file":"2026-OS-L8-Deadlocks.pdf","page":20}]}
+{"id":"q4","query":"What is a deadlock?","answers":[{"file":"2026-OS-L8-Deadlocks.pdf","page":3}]}
+{"id":"q5","query":"deadlock prevention에서 no preemption은 왜 비현실적인가?","answers":[{"file":"2026-OS-L8-Deadlocks.pdf","page":18}]}
