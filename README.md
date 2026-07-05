@@ -690,6 +690,37 @@ LLM이 최종 답변에서 실제로 사용했다고 명시한 근거 source
 | Hit@10 | 정답 근거가 상위 10개 안에 포함되는 비율 |
 | MRR | 정답 근거가 얼마나 높은 순위에 등장하는지를 반영하는 지표 |
 
+### Evaluation Reporting & Error Analysis
+
+초기 evaluation script는 Hit@k, MRR, detailed results를 terminal에 출력하는 방식이었습니다. 이제 `evaluate_hybrid_rerank.py`는 evaluation 결과를 JSON과 Markdown으로 저장할 수 있습니다. 이를 통해 실험 재현성과 weak-case 분석이 쉬워집니다.
+
+JSON report는 다음 top-level 구조를 사용합니다.
+
+```text
+run_metadata
+summary
+detailed_results
+weak_cases
+```
+
+Weak case는 `answer_rank`가 `None`이거나 `answer_rank > 1`인 질문입니다. Weak case를 보면 retrieval ranking이 불안정한 query를 빠르게 찾을 수 있습니다. Report에는 top1 source, page, `section_title`이 있는 경우의 section title, 그리고 retrieved text preview가 포함됩니다.
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
+  --questions eval/questions_ai_papers.jsonl \
+  --chunks data/processed/chunks_ai_papers_section.json \
+  --collection trustdoc_ai_papers_section \
+  --hybrid_top_k 10 \
+  --dense_top_k 10 \
+  --bm25_top_k 10 \
+  --output eval/results/ai_papers_section_hybrid_rerank.json \
+  --markdown_output eval/results/ai_papers_section_hybrid_rerank.md
+```
+
+`eval/results/`는 Git에서 제외됩니다. 생성된 report는 로컬 실험 artifact이며, source document의 text preview를 포함할 수 있기 때문에 GitHub에 commit하지 않습니다.
+
+예를 들어 section-aware + hybrid + rerank 실험에서는 `ai_q1`, `ai_q6` 같은 weak case가 자동으로 식별되었습니다. 이를 통해 top1 retrieval이 왜 잘못되었거나 부분적으로만 맞았는지 더 쉽게 확인할 수 있었습니다.
+
 ---
 
 ## Baseline Retrieval
@@ -1098,6 +1129,8 @@ Multi-document-set Evaluation
 AI Papers Evaluation Set
 Section-aware Chunking
 Section-aware Chunking Evaluation
+Evaluation Report Export
+Weak-case Analysis
 Gemini RAG Answer Generation
 Source Citation
 FastAPI Serving
