@@ -10,21 +10,54 @@ import streamlit as st
 DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_TIMEOUT_SECONDS = 120
 
-COLLECTION_OPTIONS = [
-    "trustdoc_os_paragraph",
-    "trustdoc_os_fixed",
+DOCUMENT_SETS = {
+    "Operating Systems": {
+        "collection": "trustdoc_os_paragraph",
+        "chunks_path": "data/processed/chunks_paragraph_all.json",
+        "description": "Operating systems lecture documents",
+    },
+    "AI Papers": {
+        "collection": "trustdoc_ai_papers_paragraph",
+        "chunks_path": "data/processed/chunks_ai_papers_paragraph.json",
+        "description": "RAG and AI research papers",
+    },
+}
+
+DOCUMENT_SET_OPTIONS = [
+    "Operating Systems",
+    "AI Papers",
+    "Custom",
 ]
 
-CHUNKS_PATH_OPTIONS = [
-    "data/processed/chunks_paragraph_all.json",
-    "data/processed/chunks_fixed_all.json",
-]
+EXAMPLE_QUESTIONS_BY_DOCUMENT_SET = {
+    "Operating Systems": [
+        "What are the four necessary conditions for deadlock?",
+        "What is demand paging?",
+        "What are first-fit and best-fit in contiguous allocation?",
+        "What is thrashing in virtual memory?",
+    ],
+    "AI Papers": [
+        "What is Retrieval-Augmented Generation?",
+        "How does Self-RAG decide when to retrieve?",
+        "What does RAGAS evaluate in a RAG pipeline?",
+        "How does Self-RAG differ from standard RAG?",
+    ],
+    "Custom": [
+        "What are the four necessary conditions for deadlock?",
+        "What is Retrieval-Augmented Generation?",
+        "What does RAGAS evaluate in a RAG pipeline?",
+        "What is demand paging?",
+    ],
+}
+
+DEFAULT_CUSTOM_COLLECTION = "trustdoc_os_paragraph"
+DEFAULT_CUSTOM_CHUNKS_PATH = "data/processed/chunks_paragraph_all.json"
 
 EXAMPLE_QUESTIONS = [
+    "What are the four necessary conditions for deadlock?",
     "What is demand paging?",
     "What are first-fit and best-fit in contiguous allocation?",
-    "What are the four necessary conditions for deadlock?",
-    "What is TLB reach and why does it matter?",
+    "What is thrashing in virtual memory?",
 ]
 
 SOURCE_TABLE_COLUMNS = [
@@ -319,6 +352,14 @@ def initialize_state() -> None:
         st.session_state.question = ""
 
 
+def get_document_set_config(document_set: str) -> Optional[Dict[str, str]]:
+    return DOCUMENT_SETS.get(document_set)
+
+
+def get_example_questions(document_set: str) -> List[str]:
+    return EXAMPLE_QUESTIONS_BY_DOCUMENT_SET.get(document_set, EXAMPLE_QUESTIONS)
+
+
 def main() -> None:
     st.set_page_config(
         page_title="TrustDoc RAG",
@@ -331,6 +372,38 @@ def main() -> None:
     with st.sidebar:
         st.header("Settings")
         api_base_url = st.text_input("API Base URL", value=DEFAULT_API_BASE_URL)
+        document_set = st.selectbox(
+            "Document Set",
+            options=DOCUMENT_SET_OPTIONS,
+            index=0,
+        )
+        document_set_config = get_document_set_config(document_set)
+        is_custom_document_set = document_set == "Custom"
+
+        if is_custom_document_set:
+            collection = st.text_input(
+                "Collection",
+                value=DEFAULT_CUSTOM_COLLECTION,
+                key="custom_collection",
+                help="Chroma collection name for the custom document set.",
+            )
+            chunks_path = st.text_input(
+                "Chunks path",
+                value=DEFAULT_CUSTOM_CHUNKS_PATH,
+                key="custom_chunks_path",
+                help="Chunk JSON path used by hybrid retrieval.",
+            )
+        else:
+            collection = document_set_config["collection"] if document_set_config else ""
+            chunks_path = document_set_config["chunks_path"] if document_set_config else ""
+            st.caption("Collection")
+            st.code(collection, language="text")
+            st.caption("Chunks path")
+            st.code(chunks_path, language="text")
+            if document_set_config:
+                st.caption(document_set_config["description"])
+
+        st.divider()
         endpoint_mode = st.radio(
             "Endpoint mode",
             options=["RAG Answer", "Retrieve Only"],
@@ -342,16 +415,6 @@ def main() -> None:
             index=1,
         )
         use_rerank = st.checkbox("Use rerank", value=True)
-        collection = st.selectbox(
-            "Collection",
-            options=COLLECTION_OPTIONS,
-            index=0,
-        )
-        chunks_path = st.selectbox(
-            "Chunks path",
-            options=CHUNKS_PATH_OPTIONS,
-            index=0,
-        )
 
         st.divider()
         top_k = st.slider("top_k", min_value=1, max_value=10, value=5)
@@ -399,9 +462,11 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    example_questions = get_example_questions(document_set)
+
     st.markdown("**Examples**")
     example_columns = st.columns(2)
-    for index, question in enumerate(EXAMPLE_QUESTIONS):
+    for index, question in enumerate(example_questions):
         with example_columns[index % 2]:
             if st.button(question, use_container_width=True):
                 st.session_state.question = question

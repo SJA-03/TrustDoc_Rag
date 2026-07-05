@@ -517,22 +517,57 @@ http://localhost:8501
 
 - 질문 입력
 - 예시 질문 버튼
+- document set 선택
+  - Operating Systems
+  - AI Papers
+  - Custom
 - API base URL 설정
 - `RAG Answer` / `Retrieve Only` 모드 선택
 - `dense` / `hybrid` retrieval mode 선택
 - reranking 사용 여부 선택
-- collection 선택
-- chunks path 선택
+- document set에 따른 collection / chunks path 자동 설정
+- Custom document set의 collection / chunks path 직접 입력
 - `top_k`, `initial_top_k`, `dense_top_k`, `bm25_top_k` 조정
 - 답변 출력
 - retrieved sources table 출력
 - source별 expandable card 출력
 - raw API response 확인
 
+### Supported Document Sets
+
+| Document Set | Collection | Chunks Path |
+|---|---|---|
+| Operating Systems | `trustdoc_os_paragraph` | `data/processed/chunks_paragraph_all.json` |
+| AI Papers | `trustdoc_ai_papers_paragraph` | `data/processed/chunks_ai_papers_paragraph.json` |
+| Custom | 사용자 입력 | 사용자 입력 |
+
+Document set을 선택하면 Streamlit UI가 해당 collection과 chunks path를 자동으로 API payload에 사용합니다.
+
+### Example Questions
+
+Operating Systems:
+
+```text
+What are the four necessary conditions for deadlock?
+What is demand paging?
+What are first-fit and best-fit in contiguous allocation?
+What is thrashing in virtual memory?
+```
+
+AI Papers:
+
+```text
+What is Retrieval-Augmented Generation?
+How does Self-RAG decide when to retrieve?
+What does RAGAS evaluate in a RAG pipeline?
+How does Self-RAG differ from standard RAG?
+```
+
 ### Recommended Demo Setting
 
 ```json
 {
+  "document_set": "Operating Systems",
   "endpoint_mode": "RAG Answer",
   "retrieval_mode": "hybrid",
   "use_rerank": true,
