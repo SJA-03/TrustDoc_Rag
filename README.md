@@ -2,7 +2,7 @@
 
 PDF 문서를 기반으로 질문에 대한 답변과 근거 페이지를 함께 제공하는 문서 기반 RAG(Retrieval-Augmented Generation) MVP입니다.
 
-운영체제 강의자료 PDF 21개를 대상으로 PDF 파싱, chunking, embedding, vector DB indexing, retrieval, LLM 기반 답변 생성, citation 출력, retrieval evaluation, reranking evaluation을 구현했습니다.
+운영체제 강의자료 PDF 21개를 대상으로 PDF 파싱, chunking, embedding, vector DB indexing, retrieval, LLM 기반 답변 생성, citation 출력, retrieval evaluation, reranking evaluation, hybrid retrieval evaluation을 구현했습니다.
 
 ---
 
@@ -23,6 +23,15 @@ PDF 파일
 → 근거 Source 출력
 ```
 
+추가적으로 retrieval 품질 개선을 위해 다음 실험을 진행했습니다.
+
+```text
+Dense Retrieval
+→ CrossEncoder Reranking
+→ BM25 + Dense Hybrid Retrieval
+→ Hybrid Retrieval + CrossEncoder Reranking
+```
+
 ---
 
 ## Features
@@ -39,6 +48,9 @@ PDF 파일
 - 복수 정답 페이지 지원
 - Hit@1, Hit@3, Hit@5, Hit@10, MRR 평가
 - CrossEncoder 기반 reranking 실험
+- BM25 + Dense 기반 hybrid retrieval 실험
+- RRF(Reciprocal Rank Fusion) 기반 rank fusion
+- Hybrid retrieval + reranking 실험
 
 ---
 
@@ -52,6 +64,8 @@ PDF 파일
 | Vector DB | Chroma |
 | LLM | Gemini API |
 | Reranker | CrossEncoder |
+| Keyword Retrieval | rank-bm25 |
+| Rank Fusion | Reciprocal Rank Fusion |
 | Evaluation | Hit@k, MRR |
 
 ---
@@ -72,13 +86,16 @@ TrustDoc-RAG/
 │   ├── rag/
 │   │   ├── retriever.py
 │   │   ├── reranker.py
+│   │   ├── hybrid_retriever.py
 │   │   ├── build_prompt.py
 │   │   ├── llm_client.py
 │   │   ├── run_rag.py
 │   │   └── test_gemini.py
 │   └── eval/
 │       ├── evaluate_retrieval.py
-│       └── evaluate_rerank.py
+│       ├── evaluate_rerank.py
+│       ├── evaluate_hybrid.py
+│       └── evaluate_hybrid_rerank.py
 ├── data/
 │   ├── raw/
 │   ├── processed/
@@ -115,6 +132,22 @@ PDF
 → 검색 결과로 prompt 생성
 → Gemini 답변 생성
 → 근거 source 출력
+```
+
+### 3. Retrieval Improvement
+
+```text
+Dense Retrieval
+→ candidate chunks
+
+Dense Retrieval + CrossEncoder Reranking
+→ rerank_score 기준 재정렬
+
+BM25 + Dense Hybrid Retrieval
+→ RRF 기반 rank fusion
+
+BM25 + Dense Hybrid Retrieval + CrossEncoder Reranking
+→ hybrid candidate 생성 후 reranker로 최종 재정렬
 ```
 
 ---
@@ -288,7 +321,11 @@ LLM이 최종 답변에서 실제로 사용했다고 명시한 근거 source
 | Hit@10 | 정답 근거가 상위 10개 안에 포함되는 비율 |
 | MRR | 정답 근거가 얼마나 높은 순위에 등장하는지를 반영하는 지표 |
 
-### Baseline Retrieval Result
+---
+
+## Baseline Retrieval
+
+Baseline retrieval은 Chroma 기반 dense retrieval만 사용했습니다.
 
 ```bash
 python app/eval/evaluate_retrieval.py \
@@ -366,7 +403,132 @@ Hit@1 : 0.6500 → 0.8000
 MRR   : 0.7875 → 0.8917
 ```
 
-최종적으로 현재 실험에서는 `paragraph + rerank` 조합이 가장 높은 성능을 보였습니다.
+---
+
+## Hybrid Retrieval Experiment
+
+Dense retrieval은 의미 기반 검색에 강하지만, 정확한 키워드가 중요한 질문에서는 약할 수 있습니다.  
+이를 보완하기 위해 BM25 keyword retrieval과 Dense retrieval을 결합한 Hybrid Retrieval을 실험했습니다.
+
+Hybrid Retrieval에서는 BM25 점수와 dense distance를 직접 더하지 않고, 순위 기반 결합 방식인 RRF(Reciprocal Rank Fusion)를 사용했습니다.
+
+### Hybrid Retrieval Pipeline
+
+```text
+query
+→ Dense retrieval top-k 검색
+→ BM25 retrieval top-k 검색
+→ RRF로 두 결과의 순위 결합
+→ hybrid_score 기준 재정렬
+→ 최종 retrieval 평가
+```
+
+### Run Hybrid Evaluation
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_hybrid.py \
+  --questions eval/questions.jsonl \
+  --chunks data/processed/chunks_paragraph_all.json \
+  --collection trustdoc_os_paragraph \
+  --top_k 10 \
+  --dense_top_k 10 \
+  --bm25_top_k 10
+```
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_hybrid.py \
+  --questions eval/questions.jsonl \
+  --chunks data/processed/chunks_fixed_all.json \
+  --collection trustdoc_os_fixed \
+  --top_k 10 \
+  --dense_top_k 10 \
+  --bm25_top_k 10
+```
+
+### Hybrid Retrieval Result
+
+| Method | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
+|---|---:|---:|---:|---:|---:|
+| paragraph baseline | 0.6500 | 0.9000 | 0.9500 | 1.0000 | 0.7875 |
+| paragraph + hybrid | 0.7000 | 0.8500 | 0.9500 | 1.0000 | 0.7954 |
+| fixed-size baseline | 0.7500 | 0.9000 | 0.9500 | 1.0000 | 0.8338 |
+| fixed-size + hybrid | 0.7000 | 0.9000 | 0.9500 | 1.0000 | 0.8181 |
+
+Hybrid Retrieval은 일부 키워드형 질문에서는 도움이 되었지만, 전체 성능을 안정적으로 개선하지는 못했습니다.
+
+예를 들어 `first-fit`, `best-fit`, `contiguous allocation`처럼 정확한 용어가 중요한 질문에서는 BM25가 정답 chunk를 더 높은 순위로 끌어올렸습니다.
+
+하지만 일반 개념형 질문에서는 BM25가 반복적으로 등장하는 키워드에 끌려 오히려 ranking을 흐리는 경우도 있었습니다.
+
+따라서 Hybrid Retrieval은 단독 최종 ranking 전략으로는 불안정했습니다.
+
+---
+
+## Hybrid + Reranking Experiment
+
+Hybrid Retrieval을 최종 ranking 전략으로 사용하는 대신, reranker 앞단의 candidate generation 단계로 활용하는 실험을 진행했습니다.
+
+### Hybrid + Reranking Pipeline
+
+```text
+query
+→ Dense retrieval top-k 검색
+→ BM25 retrieval top-k 검색
+→ RRF로 후보군 결합
+→ CrossEncoder reranker로 query-chunk pair 재점수화
+→ rerank_score 기준 최종 재정렬
+→ retrieval 평가
+```
+
+### Run Hybrid + Rerank Evaluation
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
+  --questions eval/questions.jsonl \
+  --chunks data/processed/chunks_paragraph_all.json \
+  --collection trustdoc_os_paragraph \
+  --hybrid_top_k 10 \
+  --dense_top_k 10 \
+  --bm25_top_k 10
+```
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
+  --questions eval/questions.jsonl \
+  --chunks data/processed/chunks_fixed_all.json \
+  --collection trustdoc_os_fixed \
+  --hybrid_top_k 10 \
+  --dense_top_k 10 \
+  --bm25_top_k 10
+```
+
+### Final Evaluation Result
+
+| Method | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
+|---|---:|---:|---:|---:|---:|
+| paragraph baseline | 0.6500 | 0.9000 | 0.9500 | 1.0000 | 0.7875 |
+| paragraph + hybrid | 0.7000 | 0.8500 | 0.9500 | 1.0000 | 0.7954 |
+| paragraph + rerank | 0.8000 | 1.0000 | 1.0000 | 1.0000 | 0.8917 |
+| paragraph + hybrid + rerank | 0.8000 | 1.0000 | 1.0000 | 1.0000 | 0.9000 |
+| fixed-size baseline | 0.7500 | 0.9000 | 0.9500 | 1.0000 | 0.8338 |
+| fixed-size + hybrid | 0.7000 | 0.9000 | 0.9500 | 1.0000 | 0.8181 |
+| fixed-size + rerank | 0.7500 | 1.0000 | 1.0000 | 1.0000 | 0.8750 |
+| fixed-size + hybrid + rerank | 0.7500 | 1.0000 | 1.0000 | 1.0000 | 0.8750 |
+
+최종적으로 현재 실험에서는 `paragraph + hybrid + rerank` 조합이 가장 높은 MRR을 보였습니다.
+
+```text
+Best method:
+paragraph + hybrid + rerank
+
+Hit@1 : 0.8000
+Hit@3 : 1.0000
+Hit@5 : 1.0000
+Hit@10: 1.0000
+MRR   : 0.9000
+```
+
+다만 `paragraph + rerank` 대비 MRR만 `0.8917 → 0.9000`으로 소폭 개선되었기 때문에, hybrid의 추가 효과는 제한적이었습니다.
 
 ---
 
@@ -377,8 +539,11 @@ MRR   : 0.7875 → 0.8917
 - 두 baseline 방식 모두 Hit@10은 1.0000으로, 정답 근거를 top10 안에는 모두 포함했습니다.
 - 따라서 현재 문제는 검색 실패보다는 ranking 품질 개선 문제에 가깝습니다.
 - CrossEncoder reranking을 적용하자 Hit@3, Hit@5가 모두 1.0000으로 개선되었습니다.
-- 최종 실험에서는 paragraph + rerank 조합이 가장 좋은 성능을 보였습니다.
-- RAG에서는 chunking 전략을 embedding retrieval 성능만으로 판단하기보다, reranker까지 포함한 최종 retrieval pipeline 기준으로 평가해야 합니다.
+- Hybrid Retrieval 단독은 일부 키워드형 질문에는 도움이 되었지만, 전체적으로 안정적인 성능 개선을 만들지는 못했습니다.
+- BM25는 정확한 용어가 중요한 질문에서는 유리했지만, 반복 키워드가 많은 개념형 질문에서는 순위를 흐릴 수 있었습니다.
+- Hybrid Retrieval을 최종 ranking 전략으로 쓰기보다는, reranker 앞단의 candidate generation 단계로 활용하는 편이 더 안정적이었습니다.
+- 최종 실험에서는 paragraph + hybrid + rerank 조합이 가장 높은 MRR을 보였습니다.
+- RAG에서는 chunking 전략을 embedding retrieval 성능만으로 판단하기보다, candidate generation, reranking까지 포함한 최종 retrieval pipeline 기준으로 평가해야 합니다.
 
 ---
 
@@ -388,6 +553,8 @@ MRR   : 0.7875 → 0.8917
 - 운영체제 강의자료 PDF에 한정된 실험입니다.
 - OCR, Table OCR, Layout-aware parsing은 아직 구현하지 않았습니다.
 - Reranker는 성능을 개선하지만, embedding search보다 느립니다.
+- Hybrid Retrieval의 RRF 파라미터와 top-k 설정을 충분히 튜닝하지 않았습니다.
+- 현재 BM25 tokenization은 간단한 regex 기반이며, 한국어 형태소 분석은 적용하지 않았습니다.
 - 현재는 CLI 중심이며 별도의 웹 UI는 없습니다.
 - LLM 답변 품질에 대한 자동 평가는 아직 포함하지 않았습니다.
 
@@ -397,7 +564,8 @@ MRR   : 0.7875 → 0.8917
 
 - 평가 질문 30~50개 이상으로 확장
 - Query expansion 실험
-- Hybrid retrieval BM25 + dense retrieval 적용
+- BM25 tokenization 개선
+- RRF 파라미터 및 dense/BM25 candidate top-k 튜닝
 - OCR / Table OCR / Layout-aware chunking 적용
 - RAG 답변 품질 평가 추가
 - FastAPI 기반 serving
@@ -423,6 +591,10 @@ Multiple Answer Page Evaluation
 Hit@10 Metric
 CrossEncoder Reranking
 Rerank Evaluation
+BM25 Retrieval
+RRF-based Hybrid Retrieval
+Hybrid Retrieval Evaluation
+Hybrid + Rerank Evaluation
 ```
 
-TrustDoc RAG는 현재 문서 기반 RAG MVP에서 한 단계 더 나아가, chunking 전략과 reranking 전략을 정량 평가할 수 있는 실험형 RAG 프로젝트입니다.
+TrustDoc RAG는 현재 문서 기반 RAG MVP에서 한 단계 더 나아가, chunking 전략, dense retrieval, keyword retrieval, reranking, hybrid candidate generation을 정량 평가할 수 있는 실험형 RAG 프로젝트입니다.
