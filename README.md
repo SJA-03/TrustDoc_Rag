@@ -894,6 +894,80 @@ MRR   : 0.9000
 
 ---
 
+## AI Papers Evaluation
+
+The AI Papers document set contains three RAG-related papers:
+
+- Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks
+- SELF-RAG
+- Ragas
+
+This document set is used to test whether the RAG pipeline works beyond the Operating Systems lecture slides. The AI Papers document set was chunked into 260 paragraph chunks.
+
+```text
+Chroma collection: trustdoc_ai_papers_paragraph
+Evaluation file: eval/questions_ai_papers.jsonl
+```
+
+### Run Dense Baseline
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_retrieval.py \
+  --questions eval/questions_ai_papers.jsonl \
+  --collection trustdoc_ai_papers_paragraph \
+  --top_k 10
+```
+
+### Run Dense + Rerank
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_rerank.py \
+  --questions eval/questions_ai_papers.jsonl \
+  --collection trustdoc_ai_papers_paragraph \
+  --initial_top_k 10
+```
+
+### Run Hybrid
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_hybrid.py \
+  --questions eval/questions_ai_papers.jsonl \
+  --chunks data/processed/chunks_ai_papers_paragraph.json \
+  --collection trustdoc_ai_papers_paragraph \
+  --top_k 10 \
+  --dense_top_k 10 \
+  --bm25_top_k 10
+```
+
+### Run Hybrid + Rerank
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
+  --questions eval/questions_ai_papers.jsonl \
+  --chunks data/processed/chunks_ai_papers_paragraph.json \
+  --collection trustdoc_ai_papers_paragraph \
+  --hybrid_top_k 10 \
+  --dense_top_k 10 \
+  --bm25_top_k 10
+```
+
+### AI Papers Result
+
+| Method | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
+|---|---:|---:|---:|---:|---:|
+| dense baseline | 0.6667 | 0.9167 | 1.0000 | 1.0000 | 0.7986 |
+| dense + rerank | 0.7500 | 0.9167 | 1.0000 | 1.0000 | 0.8403 |
+| hybrid | 0.6667 | 1.0000 | 1.0000 | 1.0000 | 0.8333 |
+| hybrid + rerank | 0.7500 | 1.0000 | 1.0000 | 1.0000 | 0.8611 |
+
+Dense retrieval already found correct evidence within top5/top10 for all questions. However, Hit@1 was only 0.6667, so top-rank quality was limited. CrossEncoder reranking improved Hit@1 and MRR.
+
+Hybrid retrieval improved Hit@3 to 1.0000, showing BM25 helps stabilize keyword-heavy paper retrieval. Hybrid + rerank achieved the best MRR of 0.8611. This suggests that for paper-style documents, combining keyword-based candidate generation with reranking is more reliable than dense retrieval alone.
+
+Compared with the OS document set, the AI Papers document set has a different structure and style. OS slides and AI papers are different document types, but both document sets showed that correct evidence usually appears in top-k candidates. The main challenge is ranking the best evidence at the top. Reranking and hybrid candidate generation help improve this ranking quality.
+
+---
+
 ## Key Findings
 
 - 작은 평가셋만으로 chunking 전략의 우열을 판단하면 위험합니다.
@@ -951,6 +1025,8 @@ RRF Fusion
 CrossEncoder Reranking
 Retrieval Evaluation
 Hybrid + Rerank Evaluation
+Multi-document-set Evaluation
+AI Papers Evaluation Set
 Gemini RAG Answer Generation
 Source Citation
 FastAPI Serving
