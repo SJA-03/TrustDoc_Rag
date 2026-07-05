@@ -44,6 +44,7 @@ def evaluate(questions, collection_name: str, top_k: int):
     hit_1 = 0
     hit_3 = 0
     hit_5 = 0
+    hit_10 = 0
     mrr_total = 0.0
 
     detailed_results = []
@@ -64,6 +65,9 @@ def evaluate(questions, collection_name: str, top_k: int):
 
         if rank is not None and rank <= 5:
             hit_5 += 1
+
+        if rank is not None and rank <= 10:
+            hit_10 += 1
 
         if rank is not None:
             mrr_total += 1 / rank
@@ -94,6 +98,7 @@ def evaluate(questions, collection_name: str, top_k: int):
         "hit@1": hit_1 / total,
         "hit@3": hit_3 / total,
         "hit@5": hit_5 / total,
+        "hit@10": hit_10 / total,
         "mrr": mrr_total / total,
     }
 
@@ -108,6 +113,7 @@ def print_results(metrics, detailed_results, collection_name: str):
     print(f"Hit@1: {metrics['hit@1']:.4f}")
     print(f"Hit@3: {metrics['hit@3']:.4f}")
     print(f"Hit@5: {metrics['hit@5']:.4f}")
+    print(f"Hit@10: {metrics['hit@10']:.4f}")
     print(f"MRR:   {metrics['mrr']:.4f}")
 
     print("\nDetailed Results")

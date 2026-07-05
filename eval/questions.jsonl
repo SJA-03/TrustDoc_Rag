@@ -3,3 +3,18 @@
 {"id":"q3","query":"Lock ordering prevents deadlock by eliminating what condition?","answers":[{"file":"2026-OS-L8B-Deadlocks.pdf","page":2},{"file":"2026-OS-L8-Deadlocks.pdf","page":20}]}
 {"id":"q4","query":"What is a deadlock?","answers":[{"file":"2026-OS-L8-Deadlocks.pdf","page":3}]}
 {"id":"q5","query":"deadlock prevention에서 no preemption은 왜 비현실적인가?","answers":[{"file":"2026-OS-L8-Deadlocks.pdf","page":18}]}
+{"id":"q6","query":"What is demand paging?","answers":[{"file":"2026-OS-L10A-VirtualMemory.pdf","page":7}]}
+{"id":"q7","query":"When does a page fault occur in demand paging?","answers":[{"file":"2026-OS-L10A-VirtualMemory.pdf","page":8},{"file":"2026-OS-L10A-VirtualMemory.pdf","page":10},{"file":"2026-OS-L10A-VirtualMemory.pdf","page":12}]}
+{"id":"q8","query":"What is FIFO page replacement?","answers":[{"file":"2026-OS-L10A-VirtualMemory.pdf","page":21}]}
+{"id":"q9","query":"What is LRU page replacement?","answers":[{"file":"2026-OS-L10A-VirtualMemory.pdf","page":24},{"file":"2026-OS-L10A-VirtualMemory.pdf","page":25}]}
+{"id":"q10","query":"Why is exact LRU expensive to implement?","answers":[{"file":"2026-OS-L10A-VirtualMemory.pdf","page":25},{"file":"2026-OS-L10A-VirtualMemory.pdf","page":26}]}
+{"id":"q11","query":"What is thrashing in virtual memory?","answers":[{"file":"2026-OS-L10B-VirtualMemory.pdf","page":3},{"file":"2026-OS-L10B-VirtualMemory.pdf","page":4}]}
+{"id":"q12","query":"What is the working-set model?","answers":[{"file":"2026-OS-L10B-VirtualMemory.pdf","page":6},{"file":"2026-OS-L10B-VirtualMemory.pdf","page":7}]}
+{"id":"q13","query":"What is TLB reach and why does it matter?","answers":[{"file":"2026-OS-L10B-VirtualMemory.pdf","page":12}]}
+{"id":"q14","query":"What is contiguous allocation in main memory?","answers":[{"file":"2026-OS-L9A-MainMemory.pdf","page":10},{"file":"2026-OS-L9A-MainMemory.pdf","page":12}]}
+{"id":"q15","query":"What are first-fit and best-fit in contiguous allocation?","answers":[{"file":"2026-OS-L9A-MainMemory.pdf","page":13}]}
+{"id":"q16","query":"What is the SCAN algorithm in HDD scheduling?","answers":[{"file":"2026-OS-L11-MassStorage.pdf","page":7}]}
+{"id":"q17","query":"What is RAID and why is redundancy useful?","answers":[{"file":"2026-OS-L11-MassStorage.pdf","page":16},{"file":"2026-OS-L11-MassStorage.pdf","page":17}]}
+{"id":"q18","query":"What is DMA in I/O systems?","answers":[{"file":"2026-OS-L12-IOSystems.pdf","page":12}]}
+{"id":"q19","query":"What is a semaphore and how is it used for synchronization?","answers":[{"file":"2026-OS-L6B_Synchronization.pdf","page":23},{"file":"2026-OS-L6B_Synchronization.pdf","page":24},{"file":"2026-OS-L6B_Synchronization.pdf","page":25}]}
+{"id":"q20","query":"What is a context switch?","answers":[{"file":"2026-OS-L3A-Processes_Part1.pdf","page":13},{"file":"2026-OS-L3A-Processes_Part1.pdf","page":15},{"file":"2026-OS-L3A-Processes_Part1.pdf","page":17}]}
