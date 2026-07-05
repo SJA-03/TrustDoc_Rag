@@ -7,3 +7,5 @@ google-genai
 rank-bm25==0.2.2
 fastapi==0.139.0
 uvicorn==0.50.0
+streamlit
+requests

@@ -659,6 +659,35 @@ Example response:
 }
 ```
 
+## Streamlit Demo UI
+
+TrustDoc RAG includes a thin Streamlit demo UI that calls the existing FastAPI backend.
+
+Backend:
+
+```bash
+PYTHONPATH=. python -m uvicorn app.api.main:app --reload
+```
+
+Frontend:
+
+```bash
+streamlit run app/ui/streamlit_app.py
+```
+
+`/rag/retrieve` is for retrieval debugging without an LLM call.
+
+`/rag/query` is for final RAG answer generation.
+
+Recommended default demo setting:
+
+```text
+retrieval_mode: hybrid
+use_rerank: true
+collection: trustdoc_os_paragraph
+chunks_path: data/processed/chunks_paragraph_all.json
+```
+
 ### Final Evaluation Result
 
 | Method | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
