@@ -53,14 +53,16 @@ def main():
     for idx, chunk in enumerate(chunks):
         ids.append(str(idx))
         documents.append(chunk["text"])
-        metadatas.append(
-            {
-                "source_file": chunk["source_file"],
-                "page_number": chunk["page_number"],
-                "chunk_id": chunk["chunk_id"],
-                "chunking_strategy": chunk["chunking_strategy"],
-            }
-        )
+        metadata = {
+            "source_file": chunk["source_file"],
+            "page_number": chunk["page_number"],
+            "chunk_id": chunk["chunk_id"],
+            "chunking_strategy": chunk["chunking_strategy"],
+        }
+        if chunk.get("section_title") is not None:
+            metadata["section_title"] = chunk["section_title"]
+
+        metadatas.append(metadata)
 
     batch_size = 64
 

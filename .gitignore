@@ -9,5 +9,8 @@ data/raw/
 data/processed/
 data/chroma/
 
+# Eval outputs
+eval/results/
+
 # OS
 .DS_Store

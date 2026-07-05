@@ -21,6 +21,8 @@ def normalize_chunk(chunk: Dict[str, Any]) -> Dict[str, Any]:
             "chunk_id": chunk.get("chunk_id"),
             "chunking_strategy": chunk.get("chunking_strategy"),
         }
+        if chunk.get("section_title") is not None:
+            metadata["section_title"] = chunk["section_title"]
 
     return {
         "text": chunk["text"],
@@ -115,6 +117,11 @@ class HybridRetriever:
 
             fused[key]["bm25_rank"] = result["rank"]
             fused[key]["bm25_score"] = result.get("bm25_score")
+            if (
+                not fused[key]["metadata"].get("section_title")
+                and result["metadata"].get("section_title")
+            ):
+                fused[key]["metadata"]["section_title"] = result["metadata"]["section_title"]
             fused[key]["hybrid_score"] += 1.0 / (self.rrf_k + result["rank"])
 
         results = sorted(

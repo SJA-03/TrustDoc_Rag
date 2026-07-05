@@ -2,6 +2,7 @@ import argparse
 import json
 from typing import Any, Dict, List, Optional
 
+from app.eval.report_utils import save_evaluation_json, save_markdown_report
 from app.rag.hybrid_retriever import HybridRetriever
 from app.rag.reranker import CrossEncoderReranker
 
@@ -170,6 +171,8 @@ def main():
     parser.add_argument("--hybrid_top_k", type=int, default=10)
     parser.add_argument("--dense_top_k", type=int, default=10)
     parser.add_argument("--bm25_top_k", type=int, default=10)
+    parser.add_argument("--output", help="JSON evaluation report output path")
+    parser.add_argument("--markdown_output", help="Markdown evaluation report output path")
 
     args = parser.parse_args()
 
@@ -192,6 +195,32 @@ def main():
         dense_top_k=args.dense_top_k,
         bm25_top_k=args.bm25_top_k,
     )
+
+    metadata = {
+        "questions_path": args.questions,
+        "chunks_path": args.chunks,
+        "collection": args.collection,
+        "evaluation_method": "hybrid_rerank",
+        "hybrid_top_k": args.hybrid_top_k,
+        "dense_top_k": args.dense_top_k,
+        "bm25_top_k": args.bm25_top_k,
+    }
+
+    if args.output:
+        save_evaluation_json(
+            output_path=args.output,
+            metadata=metadata,
+            metrics=result["metrics"],
+            details=result["details"],
+        )
+
+    if args.markdown_output:
+        save_markdown_report(
+            output_path=args.markdown_output,
+            metadata=metadata,
+            metrics=result["metrics"],
+            details=result["details"],
+        )
 
 
 if __name__ == "__main__":
