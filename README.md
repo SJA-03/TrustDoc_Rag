@@ -58,6 +58,7 @@ Streamlit UI
 - PDF 문서 텍스트 추출
 - page/paragraph 기반 chunking
 - fixed-size chunking
+- paper section-aware chunking
 - SentenceTransformer 기반 embedding 생성
 - Chroma Vector DB indexing
 - Chroma 기반 dense retrieval
@@ -214,6 +215,14 @@ query
 일정한 글자 수 기준으로 chunk를 나눕니다.
 
 특정 키워드나 짧은 개념 검색에는 유리할 수 있지만, 문장이나 개념이 중간에 끊길 수 있습니다.
+
+### 3. Section-aware Chunking
+
+논문형 PDF를 위한 실험적 chunking 전략입니다.
+
+텍스트에서 `Abstract`, `Introduction`, `Related Work`, `Methods`, `Experiments`, `Conclusion` 같은 section heading과 `3.1 Problem Formalization and Overview` 같은 numbered heading을 감지하고, 각 chunk에 `section_title` 메타데이터를 추가합니다.
+
+레이아웃 모델을 사용하는 방식은 아니며, PDF에서 추출된 텍스트를 기반으로 section을 추적하는 단순한 text-based 전략입니다.
 
 ---
 
@@ -966,6 +975,66 @@ Hybrid retrieval improved Hit@3 to 1.0000, showing BM25 helps stabilize keyword-
 
 Compared with the OS document set, the AI Papers document set has a different structure and style. OS slides and AI papers are different document types, but both document sets showed that correct evidence usually appears in top-k candidates. The main challenge is ranking the best evidence at the top. Reranking and hybrid candidate generation help improve this ranking quality.
 
+### Section-aware Chunking Experiment
+
+Section-aware chunking is an experimental text-based chunking strategy for paper-style PDFs. It detects section headings such as `Abstract`, `Introduction`, `Related Work`, `Evaluation Strategies`, `Experiments`, `Conclusion`, `References`, and numbered headings. It adds `section_title` metadata to each chunk.
+
+The final cleaned section-aware AI Papers chunk file had 269 chunks.
+
+```text
+Chroma collection: trustdoc_ai_papers_section
+```
+
+The first version of heading detection incorrectly treated numbered list items and metric/table rows as section titles. The detector was refined to avoid single-number list items, decimal metric rows, and table/figure captions.
+
+Create section-aware chunks:
+
+```bash
+python app/ingest/batch_ingest.py \
+  --input_dir data/raw/ai_papers \
+  --strategy section \
+  --output data/processed/chunks_ai_papers_section.json
+```
+
+Build section-aware Chroma index:
+
+```bash
+python app/retrieval/build_index.py \
+  --chunks data/processed/chunks_ai_papers_section.json \
+  --collection trustdoc_ai_papers_section
+```
+
+Dense baseline evaluation:
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_retrieval.py \
+  --questions eval/questions_ai_papers.jsonl \
+  --collection trustdoc_ai_papers_section \
+  --top_k 10
+```
+
+Hybrid + rerank evaluation:
+
+```bash
+PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
+  --questions eval/questions_ai_papers.jsonl \
+  --chunks data/processed/chunks_ai_papers_section.json \
+  --collection trustdoc_ai_papers_section \
+  --hybrid_top_k 10 \
+  --dense_top_k 10 \
+  --bm25_top_k 10
+```
+
+| AI Papers Chunking | Method | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
+|---|---|---:|---:|---:|---:|---:|
+| paragraph | hybrid + rerank | 0.7500 | 1.0000 | 1.0000 | 1.0000 | 0.8611 |
+| section-aware | dense baseline | 0.5833 | 0.7500 | 0.8333 | 1.0000 | 0.6948 |
+| section-aware | hybrid + rerank | 0.8333 | 0.9167 | 0.9167 | 1.0000 | 0.8889 |
+
+Section-aware dense retrieval performed worse than paragraph dense retrieval. This suggests that simply adding section-aware chunking does not automatically improve semantic retrieval.
+
+However, section-aware + hybrid + rerank achieved the highest Hit@1 and MRR on AI Papers. The improvement suggests that section-aware chunks can be useful when combined with keyword-based candidate generation and CrossEncoder reranking. However, Hit@3 and Hit@5 decreased because one broad definition question had the correct source at rank 6. Therefore, section-aware chunking should be considered experimental rather than the default.
+
 ---
 
 ## Key Findings
@@ -1027,6 +1096,8 @@ Retrieval Evaluation
 Hybrid + Rerank Evaluation
 Multi-document-set Evaluation
 AI Papers Evaluation Set
+Section-aware Chunking
+Section-aware Chunking Evaluation
 Gemini RAG Answer Generation
 Source Citation
 FastAPI Serving

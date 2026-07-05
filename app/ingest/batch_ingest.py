@@ -5,7 +5,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from pdf_loader import load_pdf_by_page
-from chunkers import fixed_size_chunking, paragraph_chunking
+from chunkers import fixed_size_chunking, paragraph_chunking, section_aware_chunking
 
 
 def save_json(data, output_path: str) -> None:
@@ -21,7 +21,7 @@ def main():
     parser.add_argument("--input_dir", default="data/raw", help="PDF 폴더 경로")
     parser.add_argument(
         "--strategy",
-        choices=["fixed", "paragraph"],
+        choices=["fixed", "paragraph", "section"],
         default="paragraph",
         help="chunking 전략",
     )
@@ -47,6 +47,8 @@ def main():
 
             if args.strategy == "fixed":
                 chunks = fixed_size_chunking(pages)
+            elif args.strategy == "section":
+                chunks = section_aware_chunking(pages)
             else:
                 chunks = paragraph_chunking(pages)
 
