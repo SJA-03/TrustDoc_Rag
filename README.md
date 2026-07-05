@@ -501,6 +501,163 @@ PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
   --dense_top_k 10 \
   --bm25_top_k 10
 ```
+---
+
+## FastAPI Serving
+
+TrustDoc RAG는 CLI 실행뿐 아니라 FastAPI 기반 API serving도 지원합니다.
+
+API는 retrieval debugging용 endpoint와 최종 RAG 답변 생성 endpoint를 분리했습니다.
+
+```text
+POST /rag/retrieve
+→ retrieval 결과만 반환
+→ LLM 호출 없음
+→ dense / hybrid / rerank 결과 디버깅용
+
+POST /rag/query
+→ retrieval 수행
+→ optional reranking
+→ prompt 생성
+→ Gemini 답변 생성
+→ answer + retrieved_sources 반환
+```
+
+### Run API Server
+
+```bash
+PYTHONPATH=. python -m uvicorn app.api.main:app --reload
+```
+
+서버 실행 후 Swagger UI에서 API를 테스트할 수 있습니다.
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+### Request Schema
+
+```json
+{
+  "query": "What are first-fit and best-fit in contiguous allocation?",
+  "collection": "trustdoc_os_paragraph",
+  "chunks_path": "data/processed/chunks_paragraph_all.json",
+  "retrieval_mode": "hybrid",
+  "top_k": 5,
+  "initial_top_k": 10,
+  "dense_top_k": 10,
+  "bm25_top_k": 10,
+  "use_rerank": true
+}
+```
+
+### Retrieval-only API
+
+```bash
+curl -X POST "http://127.0.0.1:8000/rag/retrieve" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What are first-fit and best-fit in contiguous allocation?",
+    "collection": "trustdoc_os_paragraph",
+    "chunks_path": "data/processed/chunks_paragraph_all.json",
+    "retrieval_mode": "hybrid",
+    "top_k": 5,
+    "initial_top_k": 10,
+    "dense_top_k": 10,
+    "bm25_top_k": 10,
+    "use_rerank": true
+  }'
+```
+
+Example response:
+
+```json
+{
+  "query": "What are first-fit and best-fit in contiguous allocation?",
+  "collection": "trustdoc_os_paragraph",
+  "retrieval_mode": "hybrid",
+  "use_rerank": true,
+  "retrieved_sources": [
+    {
+      "rank": 1,
+      "source_file": "2026-OS-L9A-MainMemory.pdf",
+      "page_number": 13,
+      "chunk_id": "13_para_0",
+      "dense_rank": 6,
+      "bm25_rank": 1,
+      "hybrid_score": 0.03154,
+      "rerank_score": 6.8276
+    }
+  ]
+}
+```
+
+### RAG Query API
+
+```bash
+curl -X POST "http://127.0.0.1:8000/rag/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What are first-fit and best-fit in contiguous allocation?",
+    "collection": "trustdoc_os_paragraph",
+    "chunks_path": "data/processed/chunks_paragraph_all.json",
+    "retrieval_mode": "hybrid",
+    "top_k": 5,
+    "initial_top_k": 10,
+    "dense_top_k": 10,
+    "bm25_top_k": 10,
+    "use_rerank": true
+  }'
+```
+
+Example response:
+
+```json
+{
+  "query": "What are first-fit and best-fit in contiguous allocation?",
+  "collection": "trustdoc_os_paragraph",
+  "retrieval_mode": "hybrid",
+  "use_rerank": true,
+  "answer": "In contiguous allocation, first-fit allocates the first hole that is large enough, while best-fit allocates the smallest hole that is large enough...",
+  "retrieved_sources": [
+    {
+      "rank": 1,
+      "source_file": "2026-OS-L9A-MainMemory.pdf",
+      "page_number": 13,
+      "chunk_id": "13_para_0",
+      "dense_rank": 6,
+      "bm25_rank": 1,
+      "hybrid_score": 0.03154,
+      "rerank_score": 6.8276
+    }
+  ]
+}
+```
+
+### Supported Retrieval Modes
+
+| retrieval_mode | Description |
+|---|---|
+| `dense` | Chroma vector DB 기반 semantic retrieval |
+| `hybrid` | Dense retrieval + BM25 retrieval + RRF fusion |
+
+### Reranking Option
+
+| use_rerank | Description |
+|---|---|
+| `false` | retrieval 결과를 그대로 사용 |
+| `true` | CrossEncoder reranker로 최종 순위 재정렬 |
+
+현재 실험 기준 가장 좋은 설정은 다음과 같습니다.
+
+```json
+{
+  "retrieval_mode": "hybrid",
+  "use_rerank": true,
+  "collection": "trustdoc_os_paragraph",
+  "chunks_path": "data/processed/chunks_paragraph_all.json"
+}
+```
 
 ### Final Evaluation Result
 
