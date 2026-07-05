@@ -1,14 +1,22 @@
 # TrustDoc RAG
 
-PDF 문서를 기반으로 질문에 대한 답변과 근거 페이지를 함께 제공하는 문서 기반 RAG(Retrieval-Augmented Generation) MVP입니다.
+PDF 문서를 기반으로 질문에 대한 답변과 근거 페이지를 함께 제공하는 문서 기반 RAG(Retrieval-Augmented Generation) 시스템입니다.
 
-운영체제 강의자료 PDF 21개를 대상으로 PDF 파싱, chunking, embedding, vector DB indexing, retrieval, LLM 기반 답변 생성, citation 출력, retrieval evaluation, reranking evaluation, hybrid retrieval evaluation을 구현했습니다.
+운영체제 강의자료 PDF를 대상으로 PDF 파싱, chunking, embedding, Chroma indexing, dense retrieval, BM25 hybrid retrieval, CrossEncoder reranking, Gemini 기반 답변 생성, retrieval evaluation, FastAPI serving, Streamlit demo UI까지 구현했습니다.
+
+---
+
+## Demo
+
+TrustDoc RAG는 Streamlit UI를 통해 질문 입력, retrieval mode 선택, reranking 옵션 변경, 답변 확인, retrieved source 분석을 한 화면에서 수행할 수 있습니다.
+
+<img width="1512" height="857" alt="스크린샷 2026-07-05 오후 11 30 31" src="https://github.com/user-attachments/assets/2e89df56-fbaf-4701-9b9e-0aa0fab4105c" />
 
 ---
 
 ## Overview
 
-TrustDoc RAG는 PDF 문서를 미리 검색 가능한 형태로 저장해두고, 사용자가 질문하면 관련 문서 조각을 검색한 뒤 LLM에게 근거로 제공하여 답변을 생성하는 시스템입니다.
+TrustDoc RAG는 PDF 문서를 미리 검색 가능한 형태로 저장한 뒤, 사용자가 질문하면 관련 문서 조각을 검색하고 LLM에게 근거로 제공하여 답변을 생성하는 시스템입니다.
 
 ```text
 PDF 파일
@@ -32,25 +40,37 @@ Dense Retrieval
 → Hybrid Retrieval + CrossEncoder Reranking
 ```
 
+최종적으로 API serving과 데모 UI까지 구현하여 다음 흐름으로 사용할 수 있습니다.
+
+```text
+Streamlit UI
+→ FastAPI API
+→ Dense / Hybrid Retrieval
+→ Optional Reranking
+→ Gemini Answer Generation
+→ Answer + Retrieved Sources
+```
+
 ---
 
-## Features
+## Key Features
 
 - PDF 문서 텍스트 추출
 - page/paragraph 기반 chunking
 - fixed-size chunking
 - SentenceTransformer 기반 embedding 생성
 - Chroma Vector DB indexing
-- Query 기반 semantic retrieval
+- Chroma 기반 dense retrieval
+- BM25 기반 keyword retrieval
+- RRF 기반 hybrid retrieval
+- CrossEncoder 기반 reranking
 - Gemini API 기반 RAG 답변 생성
 - 답변 내 source citation 출력
-- Retrieval 성능 평가
-- 복수 정답 페이지 지원
-- Hit@1, Hit@3, Hit@5, Hit@10, MRR 평가
-- CrossEncoder 기반 reranking 실험
-- BM25 + Dense 기반 hybrid retrieval 실험
-- RRF(Reciprocal Rank Fusion) 기반 rank fusion
-- Hybrid retrieval + reranking 실험
+- retrieval-only API 제공
+- RAG query API 제공
+- Streamlit demo UI 제공
+- Hit@1, Hit@3, Hit@5, Hit@10, MRR 기반 retrieval evaluation
+- 복수 정답 페이지 평가 지원
 
 ---
 
@@ -62,10 +82,12 @@ Dense Retrieval
 | PDF Parsing | PyMuPDF |
 | Embedding | sentence-transformers |
 | Vector DB | Chroma |
-| LLM | Gemini API |
-| Reranker | CrossEncoder |
 | Keyword Retrieval | rank-bm25 |
 | Rank Fusion | Reciprocal Rank Fusion |
+| Reranker | CrossEncoder |
+| LLM | Gemini API |
+| API Server | FastAPI, Uvicorn |
+| Demo UI | Streamlit |
 | Evaluation | Hit@k, MRR |
 
 ---
@@ -75,6 +97,8 @@ Dense Retrieval
 ```text
 TrustDoc-RAG/
 ├── app/
+│   ├── api/
+│   │   └── main.py
 │   ├── ingest/
 │   │   ├── pdf_loader.py
 │   │   ├── chunkers.py
@@ -91,6 +115,8 @@ TrustDoc-RAG/
 │   │   ├── llm_client.py
 │   │   ├── run_rag.py
 │   │   └── test_gemini.py
+│   ├── ui/
+│   │   └── streamlit_app.py
 │   └── eval/
 │       ├── evaluate_retrieval.py
 │       ├── evaluate_rerank.py
@@ -100,6 +126,9 @@ TrustDoc-RAG/
 │   ├── raw/
 │   ├── processed/
 │   └── chroma/
+├── docs/
+│   └── images/
+│       └── streamlit-demo.png
 ├── eval/
 │   └── questions.jsonl
 ├── requirements.txt
@@ -123,31 +152,51 @@ PDF
 → Chroma Vector DB 저장
 ```
 
-### 2. Retrieval + Generation
+### 2. Retrieval
 
 ```text
 사용자 질문
 → query embedding
 → Chroma에서 관련 chunk 검색
-→ 검색 결과로 prompt 생성
-→ Gemini 답변 생성
-→ 근거 source 출력
+→ top-k candidate 반환
 ```
 
-### 3. Retrieval Improvement
+### 3. Reranking
 
 ```text
-Dense Retrieval
-→ candidate chunks
-
-Dense Retrieval + CrossEncoder Reranking
+query
+→ dense retrieval top-k 후보 검색
+→ CrossEncoder가 query-chunk pair 재점수화
 → rerank_score 기준 재정렬
+```
 
-BM25 + Dense Hybrid Retrieval
-→ RRF 기반 rank fusion
+### 4. Hybrid Retrieval
 
-BM25 + Dense Hybrid Retrieval + CrossEncoder Reranking
-→ hybrid candidate 생성 후 reranker로 최종 재정렬
+```text
+query
+→ Dense retrieval top-k 검색
+→ BM25 retrieval top-k 검색
+→ RRF로 candidate 결합
+→ hybrid_score 기준 재정렬
+```
+
+### 5. Hybrid + Reranking
+
+```text
+query
+→ Dense retrieval 후보
+→ BM25 retrieval 후보
+→ RRF 기반 hybrid candidate 생성
+→ CrossEncoder reranker로 최종 재정렬
+```
+
+### 6. Generation
+
+```text
+최종 top-k chunk
+→ prompt 생성
+→ Gemini 답변 생성
+→ source citation 포함 답변 반환
 ```
 
 ---
@@ -156,12 +205,14 @@ BM25 + Dense Hybrid Retrieval + CrossEncoder Reranking
 
 ### 1. Paragraph / Page-based Chunking
 
-페이지 단위의 문맥을 비교적 잘 보존합니다.  
+페이지 단위의 문맥을 비교적 잘 보존합니다.
+
 강의자료 PDF처럼 한 페이지에 하나의 개념이 정리된 문서에서 유리할 수 있습니다.
 
 ### 2. Fixed-size Chunking
 
-일정한 글자 수 기준으로 chunk를 나눕니다.  
+일정한 글자 수 기준으로 chunk를 나눕니다.
+
 특정 키워드나 짧은 개념 검색에는 유리할 수 있지만, 문장이나 개념이 중간에 끊길 수 있습니다.
 
 ---
@@ -191,6 +242,26 @@ GEMINI_MODEL=gemini-2.5-flash
 
 ---
 
+## Data Preparation
+
+PDF 파일은 GitHub에 포함하지 않습니다.
+
+로컬 환경에서 PDF 파일을 다음 경로에 넣습니다.
+
+```text
+data/raw/
+```
+
+예시:
+
+```text
+data/raw/2026-OS-L8-Deadlocks.pdf
+data/raw/2026-OS-L9A-MainMemory.pdf
+data/raw/2026-OS-L10A-VirtualMemory.pdf
+```
+
+---
+
 ## How to Run
 
 ### 1. Single PDF Ingestion
@@ -204,12 +275,16 @@ python app/ingest/run_ingest.py \
 
 ### 2. Batch PDF Ingestion
 
+Paragraph chunking:
+
 ```bash
 python app/ingest/batch_ingest.py \
   --input_dir data/raw \
   --strategy paragraph \
   --output data/processed/chunks_paragraph_all.json
 ```
+
+Fixed-size chunking:
 
 ```bash
 python app/ingest/batch_ingest.py \
@@ -220,11 +295,15 @@ python app/ingest/batch_ingest.py \
 
 ### 3. Build Chroma Index
 
+Paragraph collection:
+
 ```bash
 python app/retrieval/build_index.py \
   --chunks data/processed/chunks_paragraph_all.json \
   --collection trustdoc_os_paragraph
 ```
+
+Fixed-size collection:
 
 ```bash
 python app/retrieval/build_index.py \
@@ -241,7 +320,7 @@ python app/retrieval/search.py \
   --top_k 5
 ```
 
-### 5. Run RAG
+### 5. Run CLI RAG
 
 ```bash
 python app/rag/run_rag.py \
@@ -252,23 +331,268 @@ python app/rag/run_rag.py \
 
 ---
 
-## Example Output
+## FastAPI Serving
+
+TrustDoc RAG는 FastAPI 기반 API serving을 지원합니다.
+
+API는 retrieval debugging용 endpoint와 최종 RAG 답변 생성 endpoint를 분리했습니다.
 
 ```text
+POST /rag/retrieve
+→ retrieval 결과만 반환
+→ LLM 호출 없음
+→ dense / hybrid / rerank 결과 디버깅용
+
+POST /rag/query
+→ retrieval 수행
+→ optional reranking
+→ prompt 생성
+→ Gemini 답변 생성
+→ answer + retrieved_sources 반환
+```
+
+### Run API Server
+
+```bash
+PYTHONPATH=. python -m uvicorn app.api.main:app --reload
+```
+
+서버 실행 후 Swagger UI에서 API를 테스트할 수 있습니다.
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+### Request Schema
+
+```json
+{
+  "query": "What are first-fit and best-fit in contiguous allocation?",
+  "collection": "trustdoc_os_paragraph",
+  "chunks_path": "data/processed/chunks_paragraph_all.json",
+  "retrieval_mode": "hybrid",
+  "top_k": 5,
+  "initial_top_k": 10,
+  "dense_top_k": 10,
+  "bm25_top_k": 10,
+  "use_rerank": true
+}
+```
+
+### Retrieval-only API
+
+```bash
+curl -X POST "http://127.0.0.1:8000/rag/retrieve" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What are first-fit and best-fit in contiguous allocation?",
+    "collection": "trustdoc_os_paragraph",
+    "chunks_path": "data/processed/chunks_paragraph_all.json",
+    "retrieval_mode": "hybrid",
+    "top_k": 5,
+    "initial_top_k": 10,
+    "dense_top_k": 10,
+    "bm25_top_k": 10,
+    "use_rerank": true
+  }'
+```
+
+Example response:
+
+```json
+{
+  "query": "What are first-fit and best-fit in contiguous allocation?",
+  "collection": "trustdoc_os_paragraph",
+  "retrieval_mode": "hybrid",
+  "use_rerank": true,
+  "retrieved_sources": [
+    {
+      "rank": 1,
+      "source_file": "2026-OS-L9A-MainMemory.pdf",
+      "page_number": 13,
+      "chunk_id": "13_para_0",
+      "distance": 0.9602,
+      "dense_rank": 6,
+      "bm25_rank": 1,
+      "hybrid_score": 0.03154,
+      "rerank_score": 6.8276,
+      "text_preview": "..."
+    }
+  ]
+}
+```
+
+### RAG Query API
+
+```bash
+curl -X POST "http://127.0.0.1:8000/rag/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What are first-fit and best-fit in contiguous allocation?",
+    "collection": "trustdoc_os_paragraph",
+    "chunks_path": "data/processed/chunks_paragraph_all.json",
+    "retrieval_mode": "hybrid",
+    "top_k": 5,
+    "initial_top_k": 10,
+    "dense_top_k": 10,
+    "bm25_top_k": 10,
+    "use_rerank": true
+  }'
+```
+
+Example response:
+
+```json
+{
+  "query": "What are first-fit and best-fit in contiguous allocation?",
+  "collection": "trustdoc_os_paragraph",
+  "retrieval_mode": "hybrid",
+  "use_rerank": true,
+  "answer": "In contiguous allocation, first-fit allocates the first hole that is large enough, while best-fit allocates the smallest hole that is large enough...",
+  "retrieved_sources": [
+    {
+      "rank": 1,
+      "source_file": "2026-OS-L9A-MainMemory.pdf",
+      "page_number": 13,
+      "chunk_id": "13_para_0",
+      "dense_rank": 6,
+      "bm25_rank": 1,
+      "hybrid_score": 0.03154,
+      "rerank_score": 6.8276
+    }
+  ]
+}
+```
+
+### Supported Retrieval Modes
+
+| retrieval_mode | Description |
+|---|---|
+| `dense` | Chroma vector DB 기반 semantic retrieval |
+| `hybrid` | Dense retrieval + BM25 retrieval + RRF fusion |
+
+### Reranking Option
+
+| use_rerank | Description |
+|---|---|
+| `false` | retrieval 결과를 그대로 사용 |
+| `true` | CrossEncoder reranker로 최종 순위 재정렬 |
+
+현재 실험 기준 가장 좋은 설정은 다음과 같습니다.
+
+```json
+{
+  "retrieval_mode": "hybrid",
+  "use_rerank": true,
+  "collection": "trustdoc_os_paragraph",
+  "chunks_path": "data/processed/chunks_paragraph_all.json"
+}
+```
+
+---
+
+## Streamlit Demo UI
+
+FastAPI endpoint를 호출하는 Streamlit 기반 데모 UI를 제공합니다.
+
+### Run Backend
+
+```bash
+PYTHONPATH=. python -m uvicorn app.api.main:app --reload
+```
+
+### Run Frontend
+
+```bash
+streamlit run app/ui/streamlit_app.py
+```
+
+실행 후 접속:
+
+```text
+http://localhost:8501
+```
+
+### UI Features
+
+- 질문 입력
+- 예시 질문 버튼
+- API base URL 설정
+- `RAG Answer` / `Retrieve Only` 모드 선택
+- `dense` / `hybrid` retrieval mode 선택
+- reranking 사용 여부 선택
+- collection 선택
+- chunks path 선택
+- `top_k`, `initial_top_k`, `dense_top_k`, `bm25_top_k` 조정
+- 답변 출력
+- retrieved sources table 출력
+- source별 expandable card 출력
+- raw API response 확인
+
+### Recommended Demo Setting
+
+```json
+{
+  "endpoint_mode": "RAG Answer",
+  "retrieval_mode": "hybrid",
+  "use_rerank": true,
+  "collection": "trustdoc_os_paragraph",
+  "chunks_path": "data/processed/chunks_paragraph_all.json",
+  "top_k": 5,
+  "initial_top_k": 10,
+  "dense_top_k": 10,
+  "bm25_top_k": 10
+}
+```
+
+Example question:
+
+```text
+What are first-fit and best-fit in contiguous allocation?
+```
+
+Expected result:
+
+```text
+Answer generated from 2026-OS-L9A-MainMemory.pdf page 13
+rank 1 source = 2026-OS-L9A-MainMemory.pdf p.13
+dense_rank = 6
+bm25_rank = 1
+rerank_score ≈ 6.8276
+```
+
+---
+
+## Example RAG Output
+
 Question:
-What are the four necessary conditions for deadlock?
+
+```text
+What are first-fit and best-fit in contiguous allocation?
+```
 
 Answer:
-For a deadlock to occur, four necessary conditions must hold simultaneously:
 
-1. Mutual exclusion
-2. Hold and wait
-3. No preemption
-4. Circular wait
+```text
+In contiguous allocation, first-fit and best-fit are methods used to satisfy a request of size n from a list of free holes.
+
+First-fit allocates the first hole that is large enough.
+Best-fit allocates the smallest hole that is large enough.
 
 Evidence
-- [Source 1, 2026-OS-L8-Deadlocks.pdf, page 17]
-- [Source 4, 2026-OS-L8-Deadlocks.pdf, page 6]
+- [Source 1, 2026-OS-L9A-MainMemory.pdf, page 13]
+```
+
+Retrieved source:
+
+```text
+rank: 1
+source_file: 2026-OS-L9A-MainMemory.pdf
+page_number: 13
+chunk_id: 13_para_0
+dense_rank: 6
+bm25_rank: 1
+rerank_score: 6.8276
 ```
 
 ---
@@ -291,7 +615,8 @@ LLM이 최종 답변에서 실제로 사용했다고 명시한 근거 source
 
 ## Retrieval Evaluation
 
-평가는 20개 질문으로 진행했습니다.  
+평가는 20개 질문으로 진행했습니다.
+
 하나의 질문에 여러 페이지가 유효한 근거가 될 수 있기 때문에 복수 정답 페이지를 지원합니다.
 
 ```json
@@ -346,9 +671,10 @@ python app/eval/evaluate_retrieval.py \
 | paragraph | 10 | 0.6500 | 0.9000 | 0.9500 | 1.0000 | 0.7875 |
 | fixed-size | 10 | 0.7500 | 0.9000 | 0.9500 | 1.0000 | 0.8338 |
 
-20개 질문 기준의 baseline retrieval에서는 fixed-size chunking이 paragraph chunking보다 Hit@1과 MRR에서 더 높은 결과를 보였습니다.
+20개 질문 기준 baseline retrieval에서는 fixed-size chunking이 paragraph chunking보다 Hit@1과 MRR에서 더 높은 결과를 보였습니다.
 
-다만 두 방식 모두 Hit@10은 1.0000으로, 정답 근거가 top10 안에는 모두 포함되었습니다.  
+다만 두 방식 모두 Hit@10은 1.0000으로, 정답 근거가 top10 안에는 모두 포함되었습니다.
+
 따라서 현재 문제는 retrieval 자체의 실패라기보다, 정답 근거를 더 상위로 올리는 ranking 품질 문제에 가깝습니다.
 
 ---
@@ -407,7 +733,8 @@ MRR   : 0.7875 → 0.8917
 
 ## Hybrid Retrieval Experiment
 
-Dense retrieval은 의미 기반 검색에 강하지만, 정확한 키워드가 중요한 질문에서는 약할 수 있습니다.  
+Dense retrieval은 의미 기반 검색에 강하지만, 정확한 키워드가 중요한 질문에서는 약할 수 있습니다.
+
 이를 보완하기 위해 BM25 keyword retrieval과 Dense retrieval을 결합한 Hybrid Retrieval을 실험했습니다.
 
 Hybrid Retrieval에서는 BM25 점수와 dense distance를 직접 더하지 않고, 순위 기반 결합 방식인 RRF(Reciprocal Rank Fusion)를 사용했습니다.
@@ -501,192 +828,6 @@ PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
   --dense_top_k 10 \
   --bm25_top_k 10
 ```
----
-
-## FastAPI Serving
-
-TrustDoc RAG는 CLI 실행뿐 아니라 FastAPI 기반 API serving도 지원합니다.
-
-API는 retrieval debugging용 endpoint와 최종 RAG 답변 생성 endpoint를 분리했습니다.
-
-```text
-POST /rag/retrieve
-→ retrieval 결과만 반환
-→ LLM 호출 없음
-→ dense / hybrid / rerank 결과 디버깅용
-
-POST /rag/query
-→ retrieval 수행
-→ optional reranking
-→ prompt 생성
-→ Gemini 답변 생성
-→ answer + retrieved_sources 반환
-```
-
-### Run API Server
-
-```bash
-PYTHONPATH=. python -m uvicorn app.api.main:app --reload
-```
-
-서버 실행 후 Swagger UI에서 API를 테스트할 수 있습니다.
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-### Request Schema
-
-```json
-{
-  "query": "What are first-fit and best-fit in contiguous allocation?",
-  "collection": "trustdoc_os_paragraph",
-  "chunks_path": "data/processed/chunks_paragraph_all.json",
-  "retrieval_mode": "hybrid",
-  "top_k": 5,
-  "initial_top_k": 10,
-  "dense_top_k": 10,
-  "bm25_top_k": 10,
-  "use_rerank": true
-}
-```
-
-### Retrieval-only API
-
-```bash
-curl -X POST "http://127.0.0.1:8000/rag/retrieve" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "What are first-fit and best-fit in contiguous allocation?",
-    "collection": "trustdoc_os_paragraph",
-    "chunks_path": "data/processed/chunks_paragraph_all.json",
-    "retrieval_mode": "hybrid",
-    "top_k": 5,
-    "initial_top_k": 10,
-    "dense_top_k": 10,
-    "bm25_top_k": 10,
-    "use_rerank": true
-  }'
-```
-
-Example response:
-
-```json
-{
-  "query": "What are first-fit and best-fit in contiguous allocation?",
-  "collection": "trustdoc_os_paragraph",
-  "retrieval_mode": "hybrid",
-  "use_rerank": true,
-  "retrieved_sources": [
-    {
-      "rank": 1,
-      "source_file": "2026-OS-L9A-MainMemory.pdf",
-      "page_number": 13,
-      "chunk_id": "13_para_0",
-      "dense_rank": 6,
-      "bm25_rank": 1,
-      "hybrid_score": 0.03154,
-      "rerank_score": 6.8276
-    }
-  ]
-}
-```
-
-### RAG Query API
-
-```bash
-curl -X POST "http://127.0.0.1:8000/rag/query" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "What are first-fit and best-fit in contiguous allocation?",
-    "collection": "trustdoc_os_paragraph",
-    "chunks_path": "data/processed/chunks_paragraph_all.json",
-    "retrieval_mode": "hybrid",
-    "top_k": 5,
-    "initial_top_k": 10,
-    "dense_top_k": 10,
-    "bm25_top_k": 10,
-    "use_rerank": true
-  }'
-```
-
-Example response:
-
-```json
-{
-  "query": "What are first-fit and best-fit in contiguous allocation?",
-  "collection": "trustdoc_os_paragraph",
-  "retrieval_mode": "hybrid",
-  "use_rerank": true,
-  "answer": "In contiguous allocation, first-fit allocates the first hole that is large enough, while best-fit allocates the smallest hole that is large enough...",
-  "retrieved_sources": [
-    {
-      "rank": 1,
-      "source_file": "2026-OS-L9A-MainMemory.pdf",
-      "page_number": 13,
-      "chunk_id": "13_para_0",
-      "dense_rank": 6,
-      "bm25_rank": 1,
-      "hybrid_score": 0.03154,
-      "rerank_score": 6.8276
-    }
-  ]
-}
-```
-
-### Supported Retrieval Modes
-
-| retrieval_mode | Description |
-|---|---|
-| `dense` | Chroma vector DB 기반 semantic retrieval |
-| `hybrid` | Dense retrieval + BM25 retrieval + RRF fusion |
-
-### Reranking Option
-
-| use_rerank | Description |
-|---|---|
-| `false` | retrieval 결과를 그대로 사용 |
-| `true` | CrossEncoder reranker로 최종 순위 재정렬 |
-
-현재 실험 기준 가장 좋은 설정은 다음과 같습니다.
-
-```json
-{
-  "retrieval_mode": "hybrid",
-  "use_rerank": true,
-  "collection": "trustdoc_os_paragraph",
-  "chunks_path": "data/processed/chunks_paragraph_all.json"
-}
-```
-
-## Streamlit Demo UI
-
-TrustDoc RAG includes a thin Streamlit demo UI that calls the existing FastAPI backend.
-
-Backend:
-
-```bash
-PYTHONPATH=. python -m uvicorn app.api.main:app --reload
-```
-
-Frontend:
-
-```bash
-streamlit run app/ui/streamlit_app.py
-```
-
-`/rag/retrieve` is for retrieval debugging without an LLM call.
-
-`/rag/query` is for final RAG answer generation.
-
-Recommended default demo setting:
-
-```text
-retrieval_mode: hybrid
-use_rerank: true
-collection: trustdoc_os_paragraph
-chunks_path: data/processed/chunks_paragraph_all.json
-```
 
 ### Final Evaluation Result
 
@@ -741,7 +882,7 @@ MRR   : 0.9000
 - Reranker는 성능을 개선하지만, embedding search보다 느립니다.
 - Hybrid Retrieval의 RRF 파라미터와 top-k 설정을 충분히 튜닝하지 않았습니다.
 - 현재 BM25 tokenization은 간단한 regex 기반이며, 한국어 형태소 분석은 적용하지 않았습니다.
-- 현재는 CLI 중심이며 별도의 웹 UI는 없습니다.
+- Streamlit UI는 로컬 데모용이며, production deployment는 아직 고려하지 않았습니다.
 - LLM 답변 품질에 대한 자동 평가는 아직 포함하지 않았습니다.
 
 ---
@@ -754,13 +895,13 @@ MRR   : 0.9000
 - RRF 파라미터 및 dense/BM25 candidate top-k 튜닝
 - OCR / Table OCR / Layout-aware chunking 적용
 - RAG 답변 품질 평가 추가
-- FastAPI 기반 serving
-- Streamlit 또는 React 기반 UI 추가
-- 업로드한 PDF에 대해 즉시 질의응답 가능한 구조로 확장
+- 파일 업로드 기반 ingestion API 추가
+- FastAPI deployment 구조 개선
+- Streamlit UI 개선 및 데모 시나리오 추가
 
 ---
 
-## Status
+## Current Status
 
 현재 구현된 범위:
 
@@ -769,18 +910,19 @@ PDF Parsing
 Chunking
 Embedding
 Chroma Indexing
-Semantic Retrieval
+Dense Retrieval
+BM25 Hybrid Retrieval
+RRF Fusion
+CrossEncoder Reranking
+Retrieval Evaluation
+Hybrid + Rerank Evaluation
 Gemini RAG Answer Generation
 Source Citation
-Retrieval Evaluation
-Multiple Answer Page Evaluation
-Hit@10 Metric
-CrossEncoder Reranking
-Rerank Evaluation
-BM25 Retrieval
-RRF-based Hybrid Retrieval
-Hybrid Retrieval Evaluation
-Hybrid + Rerank Evaluation
+FastAPI Serving
+Retrieval-only API
+RAG Query API
+Streamlit Demo UI
+Swagger UI
 ```
 
-TrustDoc RAG는 현재 문서 기반 RAG MVP에서 한 단계 더 나아가, chunking 전략, dense retrieval, keyword retrieval, reranking, hybrid candidate generation을 정량 평가할 수 있는 실험형 RAG 프로젝트입니다.
+TrustDoc RAG는 현재 문서 기반 RAG MVP에서 한 단계 더 나아가, chunking 전략, dense retrieval, keyword retrieval, reranking, hybrid candidate generation을 정량 평가하고 API/UI로 시연할 수 있는 실험형 RAG 프로젝트입니다.
