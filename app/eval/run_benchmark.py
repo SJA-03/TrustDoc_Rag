@@ -314,6 +314,7 @@ def run_benchmark(
         "run_metadata": {
             "name": config["name"],
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "dataset_commit": config.get("dataset_commit"),
             "questions": str(config["questions"]),
             "chunks": config.get("chunks"),
             "collection": config["collection"],
@@ -358,6 +359,7 @@ def build_summary_markdown(summary: Mapping[str, Any]) -> str:
         "",
         "## Run Metadata",
         "",
+        f"- Dataset commit: `{metadata.get('dataset_commit')}`",
         f"- Questions: `{metadata['questions']}` ({metadata['question_count']} queries)",
         f"- Chunks: `{metadata.get('chunks')}`",
         f"- Collection: `{metadata['collection']}`",
