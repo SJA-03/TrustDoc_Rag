@@ -1,35 +1,8 @@
 import argparse
-import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
+from app.eval.metrics import aggregate_ranks, find_answer_rank, load_questions
 from app.rag.hybrid_retriever import HybridRetriever
-
-
-def load_questions(path: str) -> List[Dict[str, Any]]:
-    questions = []
-
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            questions.append(json.loads(line))
-
-    return questions
-
-
-def find_answer_rank(results: List[Dict[str, Any]], answers: List[Dict[str, Any]]) -> Optional[int]:
-    for idx, chunk in enumerate(results):
-        meta = chunk["metadata"]
-
-        for answer in answers:
-            if (
-                meta["source_file"] == answer["file"]
-                and int(meta["page_number"]) == int(answer["page"])
-            ):
-                return idx + 1
-
-    return None
 
 
 def evaluate(
@@ -45,12 +18,8 @@ def evaluate(
         collection_name=collection_name,
     )
 
-    hit_1 = 0
-    hit_3 = 0
-    hit_5 = 0
-    hit_10 = 0
-    mrr_total = 0.0
     details = []
+    answer_ranks = []
 
     for q in questions:
         query = q["query"]
@@ -65,16 +34,7 @@ def evaluate(
 
         rank = find_answer_rank(results, answers)
 
-        if rank is not None and rank <= 1:
-            hit_1 += 1
-        if rank is not None and rank <= 3:
-            hit_3 += 1
-        if rank is not None and rank <= 5:
-            hit_5 += 1
-        if rank is not None and rank <= 10:
-            hit_10 += 1
-        if rank is not None:
-            mrr_total += 1.0 / rank
+        answer_ranks.append(rank)
 
         details.append(
             {
@@ -86,17 +46,8 @@ def evaluate(
             }
         )
 
-    total = len(questions)
-
     return {
-        "metrics": {
-            "total": total,
-            "hit@1": hit_1 / total,
-            "hit@3": hit_3 / total,
-            "hit@5": hit_5 / total,
-            "hit@10": hit_10 / total,
-            "mrr": mrr_total / total,
-        },
+        "metrics": aggregate_ranks(answer_ranks),
         "details": details,
     }
 

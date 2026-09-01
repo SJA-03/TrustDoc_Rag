@@ -1,53 +1,19 @@
 import argparse
-import json
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-sys.path.append(str(PROJECT_ROOT / "app" / "rag"))
+sys.path.insert(0, str(PROJECT_ROOT))
 
-from retriever import ChromaRetriever
-
-
-def load_questions(path: str):
-    questions = []
-
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-
-            if not line:
-                continue
-
-            questions.append(json.loads(line))
-
-    return questions
-
-
-def find_answer_rank(results, answers):
-    for idx, chunk in enumerate(results):
-        meta = chunk["metadata"]
-
-        for answer in answers:
-            if (
-                meta["source_file"] == answer["file"]
-                and int(meta["page_number"]) == int(answer["page"])
-            ):
-                return idx + 1
-
-    return None
+from app.eval.metrics import aggregate_ranks, find_answer_rank, load_questions
+from app.rag.retriever import ChromaRetriever
 
 
 def evaluate(questions, collection_name: str, top_k: int):
     retriever = ChromaRetriever(collection_name=collection_name)
 
-    hit_1 = 0
-    hit_3 = 0
-    hit_5 = 0
-    hit_10 = 0
-    mrr_total = 0.0
-
     detailed_results = []
+    answer_ranks = []
 
     for q in questions:
         results = retriever.retrieve(q["query"], top_k=top_k)
@@ -57,20 +23,7 @@ def evaluate(questions, collection_name: str, top_k: int):
             answers=q["answers"],
         )
 
-        if rank == 1:
-            hit_1 += 1
-
-        if rank is not None and rank <= 3:
-            hit_3 += 1
-
-        if rank is not None and rank <= 5:
-            hit_5 += 1
-
-        if rank is not None and rank <= 10:
-            hit_10 += 1
-
-        if rank is not None:
-            mrr_total += 1 / rank
+        answer_ranks.append(rank)
 
         detailed_results.append(
             {
@@ -91,16 +44,7 @@ def evaluate(questions, collection_name: str, top_k: int):
             }
         )
 
-    total = len(questions)
-
-    metrics = {
-        "total": total,
-        "hit@1": hit_1 / total,
-        "hit@3": hit_3 / total,
-        "hit@5": hit_5 / total,
-        "hit@10": hit_10 / total,
-        "mrr": mrr_total / total,
-    }
+    metrics = aggregate_ranks(answer_ranks)
 
     return metrics, detailed_results
 

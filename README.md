@@ -690,6 +690,30 @@ LLM이 최종 답변에서 실제로 사용했다고 명시한 근거 source
 | Hit@10 | 정답 근거가 상위 10개 안에 포함되는 비율 |
 | MRR | 정답 근거가 얼마나 높은 순위에 등장하는지를 반영하는 지표 |
 
+### Unified Benchmark
+
+`run_benchmark.py`는 동일한 question/chunk set과 최종 top-k에서 `dense`, `bm25`, `dense_rerank`, `hybrid`, `hybrid_rerank`를 순서가 고정된 하나의 실행으로 비교합니다. Hit@k와 MRR 외에 query 단위 bootstrap 95% confidence interval, query latency의 mean/p50/p95를 계산하며 모델 초기화와 warm-up 시간은 별도로 기록합니다.
+
+예제 config는 `configs/`에 있으며 OS paragraph/fixed와 AI Papers paragraph/section-aware 조합을 제공합니다.
+
+```bash
+PYTHONPATH=. python app/eval/run_benchmark.py \
+  --config configs/benchmark_os_paragraph.json \
+  --bootstrap-resamples 10000 \
+  --seed 42
+```
+
+결과는 기본적으로 `eval/results/<config name>/` 아래에 생성됩니다.
+
+```text
+summary.json
+summary.md
+summary.csv
+per_query.json
+```
+
+`summary.json`은 candidate 수, 모델명, bootstrap 설정, 초기화/warm-up 시간을 포함하고, `per_query.json`은 정답 순위, reciprocal rank, Hit@k, latency, 제한된 길이의 retrieved text preview 및 입력에 존재하는 optional metadata를 보존합니다. 로컬 chunk/index가 없으면 먼저 ingestion과 indexing을 수행해야 합니다.
+
 ### Evaluation Reporting & Error Analysis
 
 초기 evaluation script는 Hit@k, MRR, detailed results를 terminal에 출력하는 방식이었습니다. 이제 `evaluate_hybrid_rerank.py`는 evaluation 결과를 JSON과 Markdown으로 저장할 수 있습니다. 이를 통해 실험 재현성과 weak-case 분석이 쉬워집니다.

@@ -1,0 +1,17 @@
+{
+  "name": "ai_papers_section",
+  "questions": "eval/questions_ai_papers.jsonl",
+  "chunks": "data/processed/chunks_ai_papers_section.json",
+  "collection": "trustdoc_ai_papers_section",
+  "methods": [
+    "dense",
+    "bm25",
+    "dense_rerank",
+    "hybrid",
+    "hybrid_rerank"
+  ],
+  "top_k": 10,
+  "dense_top_k": 10,
+  "bm25_top_k": 10,
+  "rerank_top_k": 10
+}

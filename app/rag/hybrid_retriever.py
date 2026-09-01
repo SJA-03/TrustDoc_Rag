@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from rank_bm25 import BM25Okapi
 
@@ -75,9 +75,19 @@ class HybridRetriever:
         chunks_path: str,
         collection_name: str,
         rrf_k: int = 60,
+        dense_retriever: Optional[ChromaRetriever] = None,
+        bm25_retriever: Optional[BM25Retriever] = None,
     ):
-        self.bm25_retriever = BM25Retriever(chunks_path=chunks_path)
-        self.dense_retriever = ChromaRetriever(collection_name=collection_name)
+        self.bm25_retriever = (
+            bm25_retriever
+            if bm25_retriever is not None
+            else BM25Retriever(chunks_path=chunks_path)
+        )
+        self.dense_retriever = (
+            dense_retriever
+            if dense_retriever is not None
+            else ChromaRetriever(collection_name=collection_name)
+        )
         self.rrf_k = rrf_k
 
     def retrieve(
