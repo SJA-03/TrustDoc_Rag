@@ -714,6 +714,20 @@ per_query.json
 
 `summary.json`은 candidate 수, 모델명, bootstrap 설정, 초기화/warm-up 시간을 포함하고, `per_query.json`은 정답 순위, reciprocal rank, Hit@k, latency, 제한된 길이의 retrieved text preview 및 입력에 존재하는 optional metadata를 보존합니다. 로컬 chunk/index가 없으면 먼저 ingestion과 indexing을 수행해야 합니다.
 
+### Paired Retrieval Comparison
+
+`compare_methods.py`는 동일 query ID를 가진 `per_query.json` 결과를 정렬한 뒤 method 또는 chunking setting B와 A의 query-level Hit@1/RR 차이를 paired bootstrap으로 분석합니다. 기본값은 10,000 resamples, seed 42, 95% confidence interval입니다.
+
+```bash
+PYTHONPATH=. python app/eval/compare_methods.py \
+  --artifact os_paragraph=eval/results/heldout/os_paragraph/per_query.json \
+  --artifact os_fixed=eval/results/heldout/os_fixed/per_query.json \
+  --chunking-pair os_chunking=os_paragraph:os_fixed \
+  --output-dir eval/analysis/heldout
+```
+
+출력은 `paired_comparisons.json`, `paired_comparisons.md`, `query_pair_outcomes.json`입니다. Bootstrap의 positive/zero/negative 값은 paired resample에서 관측된 delta 방향의 비율이며 Bayesian posterior probability나 formal p-value가 아닙니다. Error-analysis candidate는 query별 reciprocal-rank 변화만으로 수집하며 원인을 자동 분류하지 않습니다.
+
 ### Evaluation Reporting & Error Analysis
 
 초기 evaluation script는 Hit@k, MRR, detailed results를 terminal에 출력하는 방식이었습니다. 이제 `evaluate_hybrid_rerank.py`는 evaluation 결과를 JSON과 Markdown으로 저장할 수 있습니다. 이를 통해 실험 재현성과 weak-case 분석이 쉬워집니다.
