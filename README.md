@@ -1,394 +1,323 @@
 # TrustDoc RAG
 
-PDF 문서를 기반으로 질문에 대한 답변과 근거 페이지를 함께 제공하는 문서 기반 RAG(Retrieval-Augmented Generation) 시스템입니다.
+> **Experimental PDF RAG system for studying how document structure, chunking, dense/sparse retrieval, RRF fusion, and CrossEncoder reranking affect evidence ranking quality.**
 
-운영체제 강의자료 PDF를 대상으로 PDF 파싱, chunking, embedding, Chroma indexing, dense retrieval, BM25 hybrid retrieval, CrossEncoder reranking, Gemini 기반 답변 생성, retrieval evaluation, FastAPI serving, Streamlit demo UI까지 구현했습니다.
+TrustDoc RAG는 단순 PDF QA 챗봇이 아니라, PDF 문서 구조와 retrieval pipeline 설계가 근거 검색 품질에 미치는 영향을 비교하는 실험 시스템입니다. Development 성능만으로 pipeline을 선택하지 않고, 별도로 동결한 held-out query에서 일반화 여부를 확인했으며 paired bootstrap, latency measurement, 원본 PDF 기반 systematic error analysis로 개선과 실패 원인을 분석했습니다.
 
----
+## At a Glance
 
-## Demo
+| Item | Scale |
+|---|---:|
+| Development queries | 32 |
+| Frozen held-out queries | 35 |
+| Document/chunking settings | 4 |
+| Retrieval pipelines | 5 |
+| Chunking strategies | 3 |
+| Paired bootstrap resamples | 10,000 |
+| Manually audited error cases | 28 |
 
-TrustDoc RAG는 Streamlit UI를 통해 질문 입력, retrieval mode 선택, reranking 옵션 변경, 답변 확인, retrieved source 분석을 한 화면에서 수행할 수 있습니다.
+### Key Results
 
-<img width="1512" height="857" alt="스크린샷 2026-07-05 오후 11 30 31" src="https://github.com/user-attachments/assets/2e89df56-fbaf-4701-9b9e-0aa0fab4105c" />
+- Dense candidate reranking showed a positive MRR direction across all four held-out settings.
+- Hybrid retrieval outperformed Dense by point estimate on both OS held-out chunking settings.
+- Hybrid candidate reranking improved all four development settings, but did not consistently reproduce that direction on frozen held-out queries.
+- BM25 remained competitive on terminology-heavy AI-paper questions.
+- Chunking effectiveness depended on the downstream retrieval pipeline and on PDF structure, including section boundaries and table remnants.
 
----
+These are results within this corpus and query sample. Method uncertainty, paired intervals, latency context, and known evaluation limitations are reported below.
 
-## Overview
+## Project Overview
 
-TrustDoc RAG는 PDF 문서를 미리 검색 가능한 형태로 저장한 뒤, 사용자가 질문하면 관련 문서 조각을 검색하고 LLM에게 근거로 제공하여 답변을 생성하는 시스템입니다.
+The system retrieves evidence pages from two document domains:
 
-```text
-PDF 파일
-→ 텍스트 추출
-→ Chunking
-→ Embedding
-→ Chroma Vector DB 저장
-→ 질문 입력
-→ 관련 chunk 검색
-→ Prompt 생성
-→ Gemini 답변 생성
-→ 근거 Source 출력
+- Operating Systems lecture slides
+- Three RAG-related papers: RAG, SELF-RAG, and Ragas
+
+Five pipelines are evaluated under an identical unified benchmark:
+
+1. Dense retrieval
+2. BM25 retrieval
+3. Dense retrieval + CrossEncoder reranking
+4. Dense + BM25 candidate retrieval with Reciprocal Rank Fusion (RRF)
+5. Hybrid retrieval + CrossEncoder reranking
+
+The experimental unit is evidence retrieval, not generated-answer quality. Hit@k and MRR measure whether an annotated source page is ranked highly; the serving layer then exposes the same retrieval components through FastAPI and Streamlit.
+
+## Why This Project?
+
+RAG systems can fail even when the correct document exists in the corpus. The important question is often not whether evidence is retrievable at all, but why it is ranked below a semantic neighbor, a repeated lexical match, an adjacent page, or a malformed chunk.
+
+This project therefore focuses on four linked problems:
+
+- separating candidate retrieval quality from final reranking quality;
+- measuring how chunk boundaries interact with downstream retrieval;
+- checking whether development-set improvements survive unseen queries;
+- connecting aggregate metrics to concrete PDF-level failure modes.
+
+## Research Questions
+
+- **RQ1 — Retrieval methods:** How much do dense, sparse, hybrid, and reranked pipelines differ in evidence ranking quality?
+- **RQ2 — Reranking generalization:** Does reranking consistently improve retrieval on unseen queries?
+- **RQ3 — Chunking interaction:** How does chunking strategy interact with the downstream retrieval and reranking pipeline?
+- **RQ4 — Development vs held-out:** Do improvements observed during pipeline exploration generalize to a frozen held-out query set?
+- **RQ5 — Failure modes:** What document and pipeline factors explain retrieval improvements and degradations?
+
+## System Overview
+
+```mermaid
+flowchart TD
+    PDF[PDF documents] --> Parse[PyMuPDF text parsing]
+    Parse --> Fixed[Fixed-size chunks]
+    Parse --> Paragraph[Paragraph/page chunks]
+    Parse --> Section[Section-aware chunks]
+
+    Fixed --> Dense[Dense retrieval]
+    Paragraph --> Dense
+    Section --> Dense
+    Fixed --> BM25[BM25 retrieval]
+    Paragraph --> BM25
+    Section --> BM25
+
+    Dense --> RRF[Reciprocal Rank Fusion]
+    BM25 --> RRF
+    Dense --> Direct[Direct evidence ranking]
+    BM25 --> Direct
+    RRF --> Direct
+    Dense --> Rerank[Optional CrossEncoder reranking]
+    RRF --> Rerank
+    Rerank --> Evaluate[Hit@k / MRR / latency]
+    Direct --> Evaluate
 ```
 
-추가적으로 retrieval 품질 개선을 위해 다음 실험을 진행했습니다.
+The answer-generation path uses the retrieved chunks to build a Gemini prompt and returns answer text with source citations. Retrieval evaluation does not call the generation model.
 
-```text
-Dense Retrieval
-→ CrossEncoder Reranking
-→ BM25 + Dense Hybrid Retrieval
-→ Hybrid Retrieval + CrossEncoder Reranking
-```
+## Experimental Design
 
-최종적으로 API serving과 데모 UI까지 구현하여 다음 흐름으로 사용할 수 있습니다.
+### Document and chunking settings
 
-```text
-Streamlit UI
-→ FastAPI API
-→ Dense / Hybrid Retrieval
-→ Optional Reranking
-→ Gemini Answer Generation
-→ Answer + Retrieved Sources
-```
+| Setting | Domain | Chunking |
+|---|---|---|
+| `os_paragraph` | OS lecture slides | Paragraph/page-based |
+| `os_fixed` | OS lecture slides | Fixed-size |
+| `ai_papers_paragraph` | RAG-related papers | Paragraph/page-based |
+| `ai_papers_section` | RAG-related papers | Text-based section-aware |
 
----
+Section-aware chunking detects extracted headings such as `Introduction`, `Methods`, or numbered subsections. It is not a layout model and does not reconstruct tables or figures.
 
-## Key Features
+### Retrieval pipelines
 
-- PDF 문서 텍스트 추출
-- page/paragraph 기반 chunking
-- fixed-size chunking
-- paper section-aware chunking
-- SentenceTransformer 기반 embedding 생성
-- Chroma Vector DB indexing
-- Chroma 기반 dense retrieval
-- BM25 기반 keyword retrieval
-- RRF 기반 hybrid retrieval
-- CrossEncoder 기반 reranking
-- Gemini API 기반 RAG 답변 생성
-- 답변 내 source citation 출력
-- retrieval-only API 제공
-- RAG query API 제공
-- Streamlit demo UI 제공
-- Hit@1, Hit@3, Hit@5, Hit@10, MRR 기반 retrieval evaluation
-- 복수 정답 페이지 평가 지원
+| Pipeline | Candidate generation | Final ranking |
+|---|---|---|
+| `dense` | Chroma + multilingual sentence embedding | Dense similarity |
+| `bm25` | BM25 keyword retrieval | BM25 score |
+| `dense_rerank` | Dense top 10 | CrossEncoder |
+| `hybrid` | Dense top 10 + BM25 top 10 | RRF (`k=60`) |
+| `hybrid_rerank` | RRF candidate top 10 | CrossEncoder |
 
----
+Shared benchmark conditions:
 
-## Tech Stack
+- final `top_k = 10`;
+- embedding model: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`;
+- reranker: `cross-encoder/ms-marco-MiniLM-L-6-v2`;
+- fixed method order in the unified runner;
+- initialization and warm-up measured separately from per-query latency.
 
-| Area | Stack |
+## Datasets and Evaluation Split
+
+| Split | OS | AI Papers | Total | Role |
+|---|---:|---:|---:|---|
+| Development | 20 | 12 | 32 | Pipeline exploration |
+| Frozen held-out | 20 | 15 | 35 | Post-development evaluation |
+
+The held-out set was built after development experimentation and frozen before its benchmark was run.
+
+- development answer-page overlap: **0**;
+- exact duplicate queries: **0**;
+- manually identified near-duplicates: **0**;
+- frozen commit: `ea47aa516a77a998aee5430f7daceb8c3ac07e75`;
+- query text, ground-truth pages, and retrieval parameters were not revised after observing held-out results.
+
+The [held-out dataset audit](eval/heldout_dataset_audit.md) validates PDF basenames, 1-based page ranges, query metadata, duplicate status, and ground-truth pages. It also records that retrieval had not been run at freeze time. The held-out queries cover definition, comparison, mechanism, reason, exact-terminology, similar-concept, and multi-page questions.
+
+## Evaluation Metrics
+
+| Metric | Interpretation |
 |---|---|
-| Language | Python |
-| PDF Parsing | PyMuPDF |
-| Embedding | sentence-transformers |
-| Vector DB | Chroma |
-| Keyword Retrieval | rank-bm25 |
-| Rank Fusion | Reciprocal Rank Fusion |
-| Reranker | CrossEncoder |
-| LLM | Gemini API |
-| API Server | FastAPI, Uvicorn |
-| Demo UI | Streamlit |
-| Evaluation | Hit@k, MRR |
+| Hit@1 | At least one valid evidence page is ranked first |
+| Hit@3 / Hit@5 / Hit@10 | Valid evidence appears within the corresponding cutoff |
+| MRR | Reciprocal rank of the first valid evidence page, averaged across queries |
+| Bootstrap 95% CI | Percentile interval from query-level resampling |
+| Paired delta | Per-query metric difference between method or chunking pairs |
+| Mean / P50 / P95 latency | Per-query runtime distribution after initialization and warm-up |
 
----
-
-## Project Structure
+Bootstrap configuration:
 
 ```text
-TrustDoc-RAG/
-├── app/
-│   ├── api/
-│   │   └── main.py
-│   ├── ingest/
-│   │   ├── pdf_loader.py
-│   │   ├── chunkers.py
-│   │   ├── run_ingest.py
-│   │   └── batch_ingest.py
-│   ├── retrieval/
-│   │   ├── build_index.py
-│   │   └── search.py
-│   ├── rag/
-│   │   ├── retriever.py
-│   │   ├── reranker.py
-│   │   ├── hybrid_retriever.py
-│   │   ├── build_prompt.py
-│   │   ├── llm_client.py
-│   │   ├── run_rag.py
-│   │   └── test_gemini.py
-│   ├── ui/
-│   │   └── streamlit_app.py
-│   └── eval/
-│       ├── evaluate_retrieval.py
-│       ├── evaluate_rerank.py
-│       ├── evaluate_hybrid.py
-│       └── evaluate_hybrid_rerank.py
-├── data/
-│   ├── raw/
-│   ├── processed/
-│   └── chroma/
-├── docs/
-│   └── images/
-│       └── streamlit-demo.png
-├── eval/
-│   └── questions.jsonl
-├── requirements.txt
-├── .gitignore
-└── README.md
+resamples = 10,000
+seed = 42
+confidence level = 95%
+sampling unit = query
 ```
 
-> `data/raw`, `data/processed`, `data/chroma`, `.env`는 GitHub에 포함하지 않습니다.
+Paired comparisons resample aligned query-level differences. Reported bootstrap positive/zero/negative fractions are directional resample fractions, not posterior probabilities or formal p-values.
 
----
+## Development Results
 
-## RAG Pipeline
+Each cell reports `Hit@1 / MRR`.
 
-### 1. Indexing
+| Setting | Dense | BM25 | Dense + Rerank | Hybrid | Hybrid + Rerank |
+|---|---:|---:|---:|---:|---:|
+| OS paragraph | .6500 / .7875 | .7000 / .7917 | .8000 / .8917 | .7000 / .7954 | .8000 / .9000 |
+| OS fixed | .7500 / .8338 | .7500 / .8125 | .7500 / .8750 | .7000 / .8181 | .7500 / .8750 |
+| AI paragraph | .6667 / .7986 | .6667 / .7743 | .7500 / .8403 | .6667 / .8333 | .7500 / .8611 |
+| AI section-aware | .5833 / .6948 | .5000 / .6500 | .7500 / .8250 | .5833 / .7500 | .8333 / .8889 |
 
-```text
-PDF
-→ page별 텍스트 추출
-→ chunk 생성
-→ embedding 생성
-→ Chroma Vector DB 저장
-```
+Development observations:
 
-### 2. Retrieval
+- Dense reranking increased aggregate MRR in all four settings.
+- Hybrid reranking also increased aggregate MRR over Hybrid in all four settings.
+- Hybrid alone did not uniformly improve over Dense.
+- Section-aware Dense was comparatively weak, while section-aware Hybrid + Rerank had the highest point estimate within that development setting.
+- Aggregate bootstrap intervals were broad and often overlapping, so these point estimates were not treated as a final method ranking.
 
-```text
-사용자 질문
-→ query embedding
-→ Chroma에서 관련 chunk 검색
-→ top-k candidate 반환
-```
+These results motivated a second question: **would the observed directions reproduce on queries that were not used during pipeline exploration?**
 
-### 3. Reranking
+## Frozen Held-out Evaluation
 
-```text
-query
-→ dense retrieval top-k 후보 검색
-→ CrossEncoder가 query-chunk pair 재점수화
-→ rerank_score 기준 재정렬
-```
+Each cell reports `Hit@1 / MRR` for the frozen queries.
 
-### 4. Hybrid Retrieval
+| Setting | Dense | BM25 | Dense + Rerank | Hybrid | Hybrid + Rerank |
+|---|---:|---:|---:|---:|---:|
+| OS paragraph | .7000 / .8017 | .7500 / .8167 | .7500 / .8417 | **.9000 / .9187** | .7000 / .8292 |
+| OS fixed | .6500 / .7600 | .7000 / .7958 | .7500 / .8375 | **.8500 / .9000** | .7000 / .8292 |
+| AI paragraph | .4000 / .5322 | **.6667 / .7206** | .6000 / .6796 | .5333 / .6617 | .5333 / .6337 |
+| AI section-aware | .4000 / .4917 | **.6667 / .7500** | .4667 / .5417 | .4667 / .6106 | .5333 / .6911 |
 
-```text
-query
-→ Dense retrieval top-k 검색
-→ BM25 retrieval top-k 검색
-→ RRF로 candidate 결합
-→ hybrid_score 기준 재정렬
-```
+Point-estimate patterns differed by domain:
 
-### 5. Hybrid + Reranking
+- Hybrid had the highest held-out Hit@1 and MRR in both OS settings.
+- BM25 had the highest held-out MRR in both AI-paper settings.
+- Dense reranking improved MRR directionally over Dense in all four settings.
+- Hybrid reranking was lower than Hybrid in OS paragraph, OS fixed, and AI paragraph, but higher in AI section-aware.
 
-```text
-query
-→ Dense retrieval 후보
-→ BM25 retrieval 후보
-→ RRF 기반 hybrid candidate 생성
-→ CrossEncoder reranker로 최종 재정렬
-```
+### Development vs held-out reranking direction
 
-### 6. Generation
+| Setting | Dev: Hybrid → Hybrid + Rerank ΔMRR | Held-out ΔMRR |
+|---|---:|---:|
+| OS paragraph | +.1046 | -.0896 |
+| OS fixed | +.0569 | -.0708 |
+| AI paragraph | +.0278 | -.0280 |
+| AI section-aware | +.1389 | +.0806 |
+
+The development improvement of Hybrid reranking did not consistently generalize. By contrast, held-out Dense → Dense + Rerank MRR deltas were positive in all four settings: `+.0400`, `+.0775`, `+.1474`, and `+.0500`. This is a more stable observed direction, not a claim of universal reranker behavior.
 
-```text
-최종 top-k chunk
-→ prompt 생성
-→ Gemini 답변 생성
-→ source citation 포함 답변 반환
-```
+## Paired Method Comparison
 
----
+Selected held-out paired results are shown below. `A → B` means the delta is `B - A`.
 
-## Chunking Strategies
+| Setting | Comparison | Metric | Delta | Paired 95% CI |
+|---|---|---|---:|---:|
+| OS paragraph | Dense → Hybrid | Hit@1 | +.2000 | [.0500, .4000] |
+| OS paragraph | Dense → Hybrid | MRR | +.1171 | [.0229, .2300] |
+| OS fixed | Dense → Hybrid | Hit@1 | +.2000 | [.0500, .4000] |
+| OS fixed | Dense → Hybrid | MRR | +.1400 | [.0375, .2575] |
+| AI section-aware | Dense + Rerank → Hybrid + Rerank | MRR | +.1494 | [.0333, .2972] |
+| AI section-aware | BM25 → Hybrid | MRR | -.1394 | [-.3006, -.0033] |
+| AI: paragraph → section-aware | Dense + Rerank | MRR | -.1380 | [-.2833, -.0222] |
+| AI: paragraph → section-aware | Hybrid + Rerank | MRR | +.0574 | [.0167, .1089] |
 
-### 1. Paragraph / Page-based Chunking
+These are percentile paired-bootstrap intervals from only 20 OS or 15 AI held-out queries. An interval excluding zero is informative for this paired sample, but it is not a formal p-value and does not remove small-sample or corpus-selection uncertainty.
 
-페이지 단위의 문맥을 비교적 잘 보존합니다.
+### Latency
 
-강의자료 PDF처럼 한 페이지에 하나의 개념이 정리된 문서에서 유리할 수 있습니다.
+The table summarizes the range across the four held-out settings in milliseconds.
 
-### 2. Fixed-size Chunking
+| Pipeline | Mean range | P50 range | P95 range |
+|---|---:|---:|---:|
+| Dense | 22.74–67.72 | 22.35–40.72 | 37.68–241.79 |
+| BM25 | 0.77–1.07 | 0.70–1.04 | 1.13–1.31 |
+| Dense + Rerank | 61.72–110.83 | 61.88–104.94 | 74.07–146.04 |
+| Hybrid | 11.72–14.91 | 11.47–15.43 | 13.29–16.94 |
+| Hybrid + Rerank | 49.46–95.24 | 41.41–94.51 | 72.12–129.12 |
 
-일정한 글자 수 기준으로 chunk를 나눕니다.
+BM25 was very fast for the current local corpus, while CrossEncoder reranking added a visible latency cost. These values depend on the specific hardware, runtime, corpus size, cache state, and local Chroma setup; they should not be generalized as algorithm-level performance.
 
-특정 키워드나 짧은 개념 검색에는 유리할 수 있지만, 문장이나 개념이 중간에 끊길 수 있습니다.
+## Systematic Error Analysis
 
-### 3. Section-aware Chunking
+Twenty-eight held-out comparison cases were manually audited against retrieved chunks and original PDF pages:
 
-논문형 PDF를 위한 실험적 chunking 전략입니다.
+| Domain | Cases |
+|---|---:|
+| Operating Systems | 14 |
+| AI Papers | 14 |
+| **Total** | **28** |
 
-텍스트에서 `Abstract`, `Introduction`, `Related Work`, `Methods`, `Experiments`, `Conclusion` 같은 section heading과 `3.1 Problem Formalization and Overview` 같은 numbered heading을 감지하고, 각 chunk에 `section_title` 메타데이터를 추가합니다.
+Cases were selected purposively to cover large rank changes and distinct mechanisms. The counts below describe this manual sample, not the prevalence of failures in the full benchmark.
 
-레이아웃 모델을 사용하는 방식은 아니며, PDF에서 추출된 텍스트를 기반으로 section을 추적하는 단순한 text-based 전략입니다.
-
----
-
-## Installation
-
-```bash
-git clone https://github.com/SJA-03/TrustDoc_Rag.git
-cd TrustDoc_Rag
-
-python -m venv venv
-source venv/bin/activate
-
-pip install -r requirements.txt
-```
-
----
-
-## Environment Variables
-
-Gemini API를 사용하기 위해 `.env` 파일을 생성합니다.
-
-```env
-GEMINI_API_KEY=your_api_key_here
-GEMINI_MODEL=gemini-2.5-flash
-```
-
----
-
-## Data Preparation
-
-PDF 파일은 GitHub에 포함하지 않습니다.
-
-로컬 환경에서 PDF 파일을 다음 경로에 넣습니다.
-
-```text
-data/raw/
-```
-
-예시:
-
-```text
-data/raw/2026-OS-L8-Deadlocks.pdf
-data/raw/2026-OS-L9A-MainMemory.pdf
-data/raw/2026-OS-L10A-VirtualMemory.pdf
-```
-
----
-
-## How to Run
-
-### 1. Single PDF Ingestion
-
-```bash
-python app/ingest/run_ingest.py \
-  --pdf "data/raw/2026-OS-L8-Deadlocks.pdf" \
-  --strategy paragraph \
-  --output data/processed/chunks_paragraph_test.json
-```
-
-### 2. Batch PDF Ingestion
-
-Paragraph chunking:
-
-```bash
-python app/ingest/batch_ingest.py \
-  --input_dir data/raw \
-  --strategy paragraph \
-  --output data/processed/chunks_paragraph_all.json
-```
-
-Fixed-size chunking:
-
-```bash
-python app/ingest/batch_ingest.py \
-  --input_dir data/raw \
-  --strategy fixed \
-  --output data/processed/chunks_fixed_all.json
-```
-
-### 3. Build Chroma Index
-
-Paragraph collection:
-
-```bash
-python app/retrieval/build_index.py \
-  --chunks data/processed/chunks_paragraph_all.json \
-  --collection trustdoc_os_paragraph
-```
-
-Fixed-size collection:
-
-```bash
-python app/retrieval/build_index.py \
-  --chunks data/processed/chunks_fixed_all.json \
-  --collection trustdoc_os_fixed
-```
-
-### 4. Search Test
-
-```bash
-python app/retrieval/search.py \
-  --query "What are the four necessary conditions for deadlock?" \
-  --collection trustdoc_os_paragraph \
-  --top_k 5
-```
-
-### 5. Run CLI RAG
-
-```bash
-python app/rag/run_rag.py \
-  --query "What are the four necessary conditions for deadlock?" \
-  --collection trustdoc_os_paragraph \
-  --top_k 5
-```
-
----
-
-## FastAPI Serving
-
-TrustDoc RAG는 FastAPI 기반 API serving을 지원합니다.
-
-API는 retrieval debugging용 endpoint와 최종 RAG 답변 생성 endpoint를 분리했습니다.
-
-```text
-POST /rag/retrieve
-→ retrieval 결과만 반환
-→ LLM 호출 없음
-→ dense / hybrid / rerank 결과 디버깅용
-
-POST /rag/query
-→ retrieval 수행
-→ optional reranking
-→ prompt 생성
-→ Gemini 답변 생성
-→ answer + retrieved_sources 반환
-```
-
-### Run API Server
-
-```bash
-PYTHONPATH=. python -m uvicorn app.api.main:app --reload
-```
-
-서버 실행 후 Swagger UI에서 API를 테스트할 수 있습니다.
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-### Request Schema
-
-```json
-{
-  "query": "What are first-fit and best-fit in contiguous allocation?",
-  "collection": "trustdoc_os_paragraph",
-  "chunks_path": "data/processed/chunks_paragraph_all.json",
-  "retrieval_mode": "hybrid",
-  "top_k": 5,
-  "initial_top_k": 10,
-  "dense_top_k": 10,
-  "bm25_top_k": 10,
-  "use_rerank": true
-}
-```
-
-### Retrieval-only API
+| Pipeline mechanism | Cases |
+|---|---:|
+| `lexical_rescue` | 5 |
+| `lexical_distraction` | 2 |
+| `fusion_rescue` | 2 |
+| `fusion_degradation` | 2 |
+| `reranker_rescue` | 4 |
+| `reranker_inversion` | 5 |
+| `chunking_improvement` | 4 |
+| `chunking_degradation` | 4 |
+
+Each annotation separates directly verifiable **observation** from evidence-based **interpretation**, and uses a second axis for document factors such as exact terminology, semantic neighbors, multi-page evidence, chunk granularity, section boundaries, or table/layout effects.
+
+### Representative cases
+
+| Mechanism | Case | Rank change | PDF-level observation |
+|---|---|---:|---|
+| Lexical rescue | `os_test_q17` | Dense 5 → BM25 1 | The evidence page directly contains the requested terms `Starvation` and `Aging`. |
+| Reranker inversion | `ai_test_q07` | Dense 1 → Dense + Rerank 9 | General SELF-RAG descriptions outranked the appendix page containing the generator-data procedure. |
+| Reranker rescue | `ai_test_q01` | Dense 5 → Dense + Rerank 1 | The CrossEncoder recovered the page defining Q-BLEU rather than general Jeopardy result pages. |
+| Fusion rescue | `os_test_q20` | Dense 2 → Hybrid 1 | Hybrid replaced a short critical-section fragment with the slide listing all three required properties. |
+| Chunking improvement | `ai_test_q12` | Paragraph Dense 2 → Section Dense 1 | One section chunk preserved the 2018/2020 Wikipedia corpus comparison and its rationale. |
+| Chunking degradation | `ai_test_q13` | Paragraph Dense 1 → Section Dense 8 | Table residue was detected as a heading and mixed with the ISUSE explanation. |
+
+### Error-analysis findings
+
+1. **Exact terminology matters.** It was the most frequently observed primary factor among the manually selected cases, particularly for paper-specific names, labels, years, and lecture terms.
+2. **Reranking errors were often subtle.** Inversions frequently occurred among semantic neighbors, partial answers, and closely related explanations rather than obviously unrelated passages.
+3. **Chunking has no uniformly better direction.** Improvements and degradations depended on section preservation, fragment size, table remnants, incorrect heading detection, and multi-page splitting.
+4. **Multi-page evidence exposes a metric limitation.** Page-level Hit/MRR can credit one valid page even when a complete answer requires complementary evidence from several pages.
+
+## Key Findings
+
+- Correct evidence was often already present in top-k; ranking quality was a major bottleneck.
+- Dense candidate reranking had a positive held-out MRR direction across all settings, while reranking Hybrid candidates was not consistently beneficial.
+- Hybrid retrieval improved Dense strongly in the OS held-out comparisons, but its benefit was less stable for AI papers.
+- BM25 remained competitive for terminology-heavy scientific-paper queries and could also be distracted by repeated vocabulary.
+- Chunking effectiveness depended jointly on document structure and the downstream retrieval/reranking method.
+- Development-set improvements did not always reproduce on frozen held-out queries.
+
+## Engineering and Demo
+
+The experimental retrieval stack is exposed as a small application rather than remaining evaluation-only code.
+
+| Layer | Implementation |
+|---|---|
+| PDF processing | PyMuPDF |
+| Dense retrieval | SentenceTransformers + Chroma |
+| Sparse retrieval | `rank-bm25` |
+| Fusion | Reciprocal Rank Fusion |
+| Reranking | CrossEncoder |
+| Generation | Gemini via `google-genai` |
+| API | FastAPI |
+| UI | Streamlit |
+
+API endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /` | Service metadata |
+| `POST /rag/retrieve` | Retrieval debugging without generation |
+| `POST /rag/query` | Retrieval, prompt construction, Gemini answer, and source citations |
+
+Example retrieval request:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/rag/retrieve" \
@@ -398,15 +327,15 @@ curl -X POST "http://127.0.0.1:8000/rag/retrieve" \
     "collection": "trustdoc_os_paragraph",
     "chunks_path": "data/processed/chunks_paragraph_all.json",
     "retrieval_mode": "hybrid",
+    "use_rerank": true,
     "top_k": 5,
     "initial_top_k": 10,
     "dense_top_k": 10,
-    "bm25_top_k": 10,
-    "use_rerank": true
+    "bm25_top_k": 10
   }'
 ```
 
-Example response:
+Compact response shape:
 
 ```json
 {
@@ -420,7 +349,6 @@ Example response:
       "source_file": "2026-OS-L9A-MainMemory.pdf",
       "page_number": 13,
       "chunk_id": "13_para_0",
-      "distance": 0.9602,
       "dense_rank": 6,
       "bm25_rank": 1,
       "hybrid_score": 0.03154,
@@ -431,761 +359,204 @@ Example response:
 }
 ```
 
-### RAG Query API
+The Streamlit UI provides document-set selection, Dense/Hybrid choice, optional reranking, source tables, expandable retrieved chunks, and raw response inspection.
 
-```bash
-curl -X POST "http://127.0.0.1:8000/rag/query" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "What are first-fit and best-fit in contiguous allocation?",
-    "collection": "trustdoc_os_paragraph",
-    "chunks_path": "data/processed/chunks_paragraph_all.json",
-    "retrieval_mode": "hybrid",
-    "top_k": 5,
-    "initial_top_k": 10,
-    "dense_top_k": 10,
-    "bm25_top_k": 10,
-    "use_rerank": true
-  }'
-```
+<img width="1512" height="857" alt="TrustDoc RAG Streamlit demo" src="https://github.com/user-attachments/assets/2e89df56-fbaf-4701-9b9e-0aa0fab4105c" />
 
-Example response:
-
-```json
-{
-  "query": "What are first-fit and best-fit in contiguous allocation?",
-  "collection": "trustdoc_os_paragraph",
-  "retrieval_mode": "hybrid",
-  "use_rerank": true,
-  "answer": "In contiguous allocation, first-fit allocates the first hole that is large enough, while best-fit allocates the smallest hole that is large enough...",
-  "retrieved_sources": [
-    {
-      "rank": 1,
-      "source_file": "2026-OS-L9A-MainMemory.pdf",
-      "page_number": 13,
-      "chunk_id": "13_para_0",
-      "dense_rank": 6,
-      "bm25_rank": 1,
-      "hybrid_score": 0.03154,
-      "rerank_score": 6.8276
-    }
-  ]
-}
-```
-
-### Supported Retrieval Modes
-
-| retrieval_mode | Description |
-|---|---|
-| `dense` | Chroma vector DB 기반 semantic retrieval |
-| `hybrid` | Dense retrieval + BM25 retrieval + RRF fusion |
-
-### Reranking Option
-
-| use_rerank | Description |
-|---|---|
-| `false` | retrieval 결과를 그대로 사용 |
-| `true` | CrossEncoder reranker로 최종 순위 재정렬 |
-
-현재 실험 기준 가장 좋은 설정은 다음과 같습니다.
-
-```json
-{
-  "retrieval_mode": "hybrid",
-  "use_rerank": true,
-  "collection": "trustdoc_os_paragraph",
-  "chunks_path": "data/processed/chunks_paragraph_all.json"
-}
-```
-
----
-
-## Streamlit Demo UI
-
-FastAPI endpoint를 호출하는 Streamlit 기반 데모 UI를 제공합니다.
-
-### Run Backend
-
-```bash
-PYTHONPATH=. python -m uvicorn app.api.main:app --reload
-```
-
-### Run Frontend
-
-```bash
-streamlit run app/ui/streamlit_app.py
-```
-
-실행 후 접속:
+## Repository Structure
 
 ```text
-http://localhost:8501
+TrustDoc-RAG/
+├── app/
+│   ├── ingest/          # PDF loading and three chunking strategies
+│   ├── retrieval/       # Chroma index construction and search
+│   ├── rag/             # Dense, BM25, Hybrid, reranking, prompt, Gemini
+│   ├── eval/            # Benchmark, metrics, paired comparison, error analysis
+│   ├── api/             # FastAPI service
+│   └── ui/              # Streamlit demo
+├── configs/             # Four development and four held-out benchmark configs
+├── eval/
+│   ├── questions*.jsonl # Development and frozen held-out queries
+│   └── heldout_dataset_audit.md
+├── data/
+│   ├── raw/             # Local PDFs
+│   ├── processed/       # Local chunk artifacts
+│   └── chroma/          # Local vector indexes
+├── tests/
+├── requirements.txt
+└── README.md
 ```
 
-### UI Features
+`data/raw`, `data/processed`, `data/chroma`, `eval/results`, and `eval/analysis` are local artifacts excluded from Git. Evaluation tables in this README were regenerated from those frozen local artifacts.
 
-- 질문 입력
-- 예시 질문 버튼
-- document set 선택
-  - Operating Systems
-  - AI Papers
-  - Custom
-- API base URL 설정
-- `RAG Answer` / `Retrieve Only` 모드 선택
-- `dense` / `hybrid` retrieval mode 선택
-- reranking 사용 여부 선택
-- document set에 따른 collection / chunks path 자동 설정
-- Custom document set의 collection / chunks path 직접 입력
-- `top_k`, `initial_top_k`, `dense_top_k`, `bm25_top_k` 조정
-- 답변 출력
-- retrieved sources table 출력
-- source별 expandable card 출력
-- raw API response 확인
-
-### Supported Document Sets
-
-| Document Set | Collection | Chunks Path |
-|---|---|---|
-| Operating Systems | `trustdoc_os_paragraph` | `data/processed/chunks_paragraph_all.json` |
-| AI Papers | `trustdoc_ai_papers_paragraph` | `data/processed/chunks_ai_papers_paragraph.json` |
-| Custom | 사용자 입력 | 사용자 입력 |
-
-Document set을 선택하면 Streamlit UI가 해당 collection과 chunks path를 자동으로 API payload에 사용합니다.
-
-### Example Questions
-
-Operating Systems:
-
-```text
-What are the four necessary conditions for deadlock?
-What is demand paging?
-What are first-fit and best-fit in contiguous allocation?
-What is thrashing in virtual memory?
-```
-
-AI Papers:
-
-```text
-What is Retrieval-Augmented Generation?
-How does Self-RAG decide when to retrieve?
-What does RAGAS evaluate in a RAG pipeline?
-How does Self-RAG differ from standard RAG?
-```
-
-### Recommended Demo Setting
-
-```json
-{
-  "document_set": "Operating Systems",
-  "endpoint_mode": "RAG Answer",
-  "retrieval_mode": "hybrid",
-  "use_rerank": true,
-  "collection": "trustdoc_os_paragraph",
-  "chunks_path": "data/processed/chunks_paragraph_all.json",
-  "top_k": 5,
-  "initial_top_k": 10,
-  "dense_top_k": 10,
-  "bm25_top_k": 10
-}
-```
-
-Example question:
-
-```text
-What are first-fit and best-fit in contiguous allocation?
-```
-
-Expected result:
-
-```text
-Answer generated from 2026-OS-L9A-MainMemory.pdf page 13
-rank 1 source = 2026-OS-L9A-MainMemory.pdf p.13
-dense_rank = 6
-bm25_rank = 1
-rerank_score ≈ 6.8276
-```
-
----
-
-## Example RAG Output
-
-Question:
-
-```text
-What are first-fit and best-fit in contiguous allocation?
-```
-
-Answer:
-
-```text
-In contiguous allocation, first-fit and best-fit are methods used to satisfy a request of size n from a list of free holes.
-
-First-fit allocates the first hole that is large enough.
-Best-fit allocates the smallest hole that is large enough.
-
-Evidence
-- [Source 1, 2026-OS-L9A-MainMemory.pdf, page 13]
-```
-
-Retrieved source:
-
-```text
-rank: 1
-source_file: 2026-OS-L9A-MainMemory.pdf
-page_number: 13
-chunk_id: 13_para_0
-dense_rank: 6
-bm25_rank: 1
-rerank_score: 6.8276
-```
-
----
-
-## Evidence vs Retrieved Sources
-
-TrustDoc RAG는 retrieved source와 evidence를 구분합니다.
-
-```text
-Retrieved Sources:
-검색 시스템이 top-k로 가져온 후보 chunk 목록
-
-Evidence:
-LLM이 최종 답변에서 실제로 사용했다고 명시한 근거 source
-```
-
-이 구분을 통해 단순 검색 결과와 실제 답변 근거를 분리해서 확인할 수 있습니다.
-
----
-
-## Retrieval Evaluation
-
-평가는 20개 질문으로 진행했습니다.
-
-하나의 질문에 여러 페이지가 유효한 근거가 될 수 있기 때문에 복수 정답 페이지를 지원합니다.
-
-```json
-{
-  "id": "q1",
-  "query": "What are the four necessary conditions for deadlock?",
-  "answers": [
-    {
-      "file": "2026-OS-L8-Deadlocks.pdf",
-      "page": 6
-    },
-    {
-      "file": "2026-OS-L8-Deadlocks.pdf",
-      "page": 17
-    }
-  ]
-}
-```
-
-### Evaluation Metrics
-
-| Metric | Meaning |
-|---|---|
-| Hit@1 | 정답 근거가 검색 결과 1등에 포함되는 비율 |
-| Hit@3 | 정답 근거가 상위 3개 안에 포함되는 비율 |
-| Hit@5 | 정답 근거가 상위 5개 안에 포함되는 비율 |
-| Hit@10 | 정답 근거가 상위 10개 안에 포함되는 비율 |
-| MRR | 정답 근거가 얼마나 높은 순위에 등장하는지를 반영하는 지표 |
-
-### Unified Benchmark
-
-`run_benchmark.py`는 동일한 question/chunk set과 최종 top-k에서 `dense`, `bm25`, `dense_rerank`, `hybrid`, `hybrid_rerank`를 순서가 고정된 하나의 실행으로 비교합니다. Hit@k와 MRR 외에 query 단위 bootstrap 95% confidence interval, query latency의 mean/p50/p95를 계산하며 모델 초기화와 warm-up 시간은 별도로 기록합니다.
-
-예제 config는 `configs/`에 있으며 OS paragraph/fixed와 AI Papers paragraph/section-aware 조합을 제공합니다.
+## Installation
 
 ```bash
-PYTHONPATH=. python app/eval/run_benchmark.py \
-  --config configs/benchmark_os_paragraph.json \
-  --bootstrap-resamples 10000 \
-  --seed 42
+git clone https://github.com/SJA-03/TrustDoc_Rag.git
+cd TrustDoc_Rag
+
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-결과는 기본적으로 `eval/results/<config name>/` 아래에 생성됩니다.
+For answer generation, create `.env`:
+
+```env
+GEMINI_API_KEY=your_api_key_here
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+Retrieval ingestion, indexing, and evaluation do not require a Gemini call.
+
+## How to Reproduce
+
+### 1. Place source PDFs
 
 ```text
-summary.json
-summary.md
-summary.csv
-per_query.json
+data/raw/OS/*.pdf
+data/raw/ai_papers/*.pdf
 ```
 
-`summary.json`은 candidate 수, 모델명, bootstrap 설정, 초기화/warm-up 시간을 포함하고, `per_query.json`은 정답 순위, reciprocal rank, Hit@k, latency, 제한된 길이의 retrieved text preview 및 입력에 존재하는 optional metadata를 보존합니다. 로컬 chunk/index가 없으면 먼저 ingestion과 indexing을 수행해야 합니다.
-
-### Paired Retrieval Comparison
-
-`compare_methods.py`는 동일 query ID를 가진 `per_query.json` 결과를 정렬한 뒤 method 또는 chunking setting B와 A의 query-level Hit@1/RR 차이를 paired bootstrap으로 분석합니다. 기본값은 10,000 resamples, seed 42, 95% confidence interval입니다.
+### 2. Parse and chunk
 
 ```bash
-PYTHONPATH=. python app/eval/compare_methods.py \
-  --artifact os_paragraph=eval/results/heldout/os_paragraph/per_query.json \
-  --artifact os_fixed=eval/results/heldout/os_fixed/per_query.json \
-  --chunking-pair os_chunking=os_paragraph:os_fixed \
-  --output-dir eval/analysis/heldout
-```
-
-출력은 `paired_comparisons.json`, `paired_comparisons.md`, `query_pair_outcomes.json`입니다. Bootstrap의 positive/zero/negative 값은 paired resample에서 관측된 delta 방향의 비율이며 Bayesian posterior probability나 formal p-value가 아닙니다. Error-analysis candidate는 query별 reciprocal-rank 변화만으로 수집하며 원인을 자동 분류하지 않습니다.
-
-### Held-out Error Analysis
-
-`summarize_error_analysis.py`는 원본 PDF와 retrieved candidate를 수동 검수한 annotation의 2-axis taxonomy를 검증하고, descriptive count와 cross-tab을 JSON/Markdown으로 생성합니다. 수동 label은 자동 추론하지 않으며 `eval/analysis/error_analysis/`의 로컬 artifact는 Git에 포함하지 않습니다.
-
-```bash
-PYTHONPATH=. python app/eval/summarize_error_analysis.py \
-  --annotations eval/analysis/error_analysis/manual_case_annotations.json \
-  --output-dir eval/analysis/error_analysis
-```
-
-### Evaluation Reporting & Error Analysis
-
-초기 evaluation script는 Hit@k, MRR, detailed results를 terminal에 출력하는 방식이었습니다. 이제 `evaluate_hybrid_rerank.py`는 evaluation 결과를 JSON과 Markdown으로 저장할 수 있습니다. 이를 통해 실험 재현성과 weak-case 분석이 쉬워집니다.
-
-JSON report는 다음 top-level 구조를 사용합니다.
-
-```text
-run_metadata
-summary
-detailed_results
-weak_cases
-```
-
-Weak case는 `answer_rank`가 `None`이거나 `answer_rank > 1`인 질문입니다. Weak case를 보면 retrieval ranking이 불안정한 query를 빠르게 찾을 수 있습니다. Report에는 top1 source, page, `section_title`이 있는 경우의 section title, 그리고 retrieved text preview가 포함됩니다.
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
-  --questions eval/questions_ai_papers.jsonl \
-  --chunks data/processed/chunks_ai_papers_section.json \
-  --collection trustdoc_ai_papers_section \
-  --hybrid_top_k 10 \
-  --dense_top_k 10 \
-  --bm25_top_k 10 \
-  --output eval/results/ai_papers_section_hybrid_rerank.json \
-  --markdown_output eval/results/ai_papers_section_hybrid_rerank.md
-```
-
-`eval/results/`는 Git에서 제외됩니다. 생성된 report는 로컬 실험 artifact이며, source document의 text preview를 포함할 수 있기 때문에 GitHub에 commit하지 않습니다.
-
-예를 들어 section-aware + hybrid + rerank 실험에서는 `ai_q1`, `ai_q6` 같은 weak case가 자동으로 식별되었습니다. 이를 통해 top1 retrieval이 왜 잘못되었거나 부분적으로만 맞았는지 더 쉽게 확인할 수 있었습니다.
-
----
-
-## Baseline Retrieval
-
-Baseline retrieval은 Chroma 기반 dense retrieval만 사용했습니다.
-
-```bash
-python app/eval/evaluate_retrieval.py \
-  --questions eval/questions.jsonl \
-  --collection trustdoc_os_paragraph \
-  --top_k 10
-```
-
-```bash
-python app/eval/evaluate_retrieval.py \
-  --questions eval/questions.jsonl \
-  --collection trustdoc_os_fixed \
-  --top_k 10
-```
-
-| Collection | top_k | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
-|---|---:|---:|---:|---:|---:|---:|
-| paragraph | 10 | 0.6500 | 0.9000 | 0.9500 | 1.0000 | 0.7875 |
-| fixed-size | 10 | 0.7500 | 0.9000 | 0.9500 | 1.0000 | 0.8338 |
-
-20개 질문 기준 baseline retrieval에서는 fixed-size chunking이 paragraph chunking보다 Hit@1과 MRR에서 더 높은 결과를 보였습니다.
-
-다만 두 방식 모두 Hit@10은 1.0000으로, 정답 근거가 top10 안에는 모두 포함되었습니다.
-
-따라서 현재 문제는 retrieval 자체의 실패라기보다, 정답 근거를 더 상위로 올리는 ranking 품질 문제에 가깝습니다.
-
----
-
-## Reranking Experiment
-
-기존 embedding search는 정답 근거를 top10 안에는 잘 포함했지만, 일부 질문에서는 정답 chunk가 top1/top3로 충분히 올라오지 못했습니다.
-
-이를 개선하기 위해 `cross-encoder/ms-marco-MiniLM-L-6-v2` 기반 CrossEncoder reranker를 추가했습니다.
-
-### Reranking Pipeline
-
-```text
-query
-→ embedding search로 후보 top10 검색
-→ CrossEncoder reranker로 query-chunk pair 재점수화
-→ rerank_score 기준 재정렬
-→ 최종 retrieval 평가
-```
-
-### Run Rerank Evaluation
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_rerank.py \
-  --questions eval/questions.jsonl \
-  --collection trustdoc_os_paragraph \
-  --initial_top_k 10
-```
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_rerank.py \
-  --questions eval/questions.jsonl \
-  --collection trustdoc_os_fixed \
-  --initial_top_k 10
-```
-
-### Reranking Result
-
-| Method | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
-|---|---:|---:|---:|---:|---:|
-| paragraph baseline | 0.6500 | 0.9000 | 0.9500 | 1.0000 | 0.7875 |
-| paragraph + rerank | 0.8000 | 1.0000 | 1.0000 | 1.0000 | 0.8917 |
-| fixed-size baseline | 0.7500 | 0.9000 | 0.9500 | 1.0000 | 0.8338 |
-| fixed-size + rerank | 0.7500 | 1.0000 | 1.0000 | 1.0000 | 0.8750 |
-
-Reranking 적용 후 두 chunking 전략 모두 Hit@3와 Hit@5가 1.0000으로 개선되었습니다.
-
-특히 paragraph chunking은 다음과 같이 성능이 크게 개선되었습니다.
-
-```text
-Hit@1 : 0.6500 → 0.8000
-MRR   : 0.7875 → 0.8917
-```
-
----
-
-## Hybrid Retrieval Experiment
-
-Dense retrieval은 의미 기반 검색에 강하지만, 정확한 키워드가 중요한 질문에서는 약할 수 있습니다.
-
-이를 보완하기 위해 BM25 keyword retrieval과 Dense retrieval을 결합한 Hybrid Retrieval을 실험했습니다.
-
-Hybrid Retrieval에서는 BM25 점수와 dense distance를 직접 더하지 않고, 순위 기반 결합 방식인 RRF(Reciprocal Rank Fusion)를 사용했습니다.
-
-### Hybrid Retrieval Pipeline
-
-```text
-query
-→ Dense retrieval top-k 검색
-→ BM25 retrieval top-k 검색
-→ RRF로 두 결과의 순위 결합
-→ hybrid_score 기준 재정렬
-→ 최종 retrieval 평가
-```
-
-### Run Hybrid Evaluation
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_hybrid.py \
-  --questions eval/questions.jsonl \
-  --chunks data/processed/chunks_paragraph_all.json \
-  --collection trustdoc_os_paragraph \
-  --top_k 10 \
-  --dense_top_k 10 \
-  --bm25_top_k 10
-```
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_hybrid.py \
-  --questions eval/questions.jsonl \
-  --chunks data/processed/chunks_fixed_all.json \
-  --collection trustdoc_os_fixed \
-  --top_k 10 \
-  --dense_top_k 10 \
-  --bm25_top_k 10
-```
-
-### Hybrid Retrieval Result
-
-| Method | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
-|---|---:|---:|---:|---:|---:|
-| paragraph baseline | 0.6500 | 0.9000 | 0.9500 | 1.0000 | 0.7875 |
-| paragraph + hybrid | 0.7000 | 0.8500 | 0.9500 | 1.0000 | 0.7954 |
-| fixed-size baseline | 0.7500 | 0.9000 | 0.9500 | 1.0000 | 0.8338 |
-| fixed-size + hybrid | 0.7000 | 0.9000 | 0.9500 | 1.0000 | 0.8181 |
-
-Hybrid Retrieval은 일부 키워드형 질문에서는 도움이 되었지만, 전체 성능을 안정적으로 개선하지는 못했습니다.
-
-예를 들어 `first-fit`, `best-fit`, `contiguous allocation`처럼 정확한 용어가 중요한 질문에서는 BM25가 정답 chunk를 더 높은 순위로 끌어올렸습니다.
-
-하지만 일반 개념형 질문에서는 BM25가 반복적으로 등장하는 키워드에 끌려 오히려 ranking을 흐리는 경우도 있었습니다.
-
-따라서 Hybrid Retrieval은 단독 최종 ranking 전략으로는 불안정했습니다.
-
----
-
-## Hybrid + Reranking Experiment
-
-Hybrid Retrieval을 최종 ranking 전략으로 사용하는 대신, reranker 앞단의 candidate generation 단계로 활용하는 실험을 진행했습니다.
-
-### Hybrid + Reranking Pipeline
-
-```text
-query
-→ Dense retrieval top-k 검색
-→ BM25 retrieval top-k 검색
-→ RRF로 후보군 결합
-→ CrossEncoder reranker로 query-chunk pair 재점수화
-→ rerank_score 기준 최종 재정렬
-→ retrieval 평가
-```
-
-### Run Hybrid + Rerank Evaluation
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
-  --questions eval/questions.jsonl \
-  --chunks data/processed/chunks_paragraph_all.json \
-  --collection trustdoc_os_paragraph \
-  --hybrid_top_k 10 \
-  --dense_top_k 10 \
-  --bm25_top_k 10
-```
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
-  --questions eval/questions.jsonl \
-  --chunks data/processed/chunks_fixed_all.json \
-  --collection trustdoc_os_fixed \
-  --hybrid_top_k 10 \
-  --dense_top_k 10 \
-  --bm25_top_k 10
-```
-
-### Final Evaluation Result
-
-| Method | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
-|---|---:|---:|---:|---:|---:|
-| paragraph baseline | 0.6500 | 0.9000 | 0.9500 | 1.0000 | 0.7875 |
-| paragraph + hybrid | 0.7000 | 0.8500 | 0.9500 | 1.0000 | 0.7954 |
-| paragraph + rerank | 0.8000 | 1.0000 | 1.0000 | 1.0000 | 0.8917 |
-| paragraph + hybrid + rerank | 0.8000 | 1.0000 | 1.0000 | 1.0000 | 0.9000 |
-| fixed-size baseline | 0.7500 | 0.9000 | 0.9500 | 1.0000 | 0.8338 |
-| fixed-size + hybrid | 0.7000 | 0.9000 | 0.9500 | 1.0000 | 0.8181 |
-| fixed-size + rerank | 0.7500 | 1.0000 | 1.0000 | 1.0000 | 0.8750 |
-| fixed-size + hybrid + rerank | 0.7500 | 1.0000 | 1.0000 | 1.0000 | 0.8750 |
-
-최종적으로 현재 실험에서는 `paragraph + hybrid + rerank` 조합이 가장 높은 MRR을 보였습니다.
-
-```text
-Best method:
-paragraph + hybrid + rerank
-
-Hit@1 : 0.8000
-Hit@3 : 1.0000
-Hit@5 : 1.0000
-Hit@10: 1.0000
-MRR   : 0.9000
-```
-
-다만 `paragraph + rerank` 대비 MRR만 `0.8917 → 0.9000`으로 소폭 개선되었기 때문에, hybrid의 추가 효과는 제한적이었습니다.
-
----
-
-## AI Papers Evaluation
-
-The AI Papers document set contains three RAG-related papers:
-
-- Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks
-- SELF-RAG
-- Ragas
-
-This document set is used to test whether the RAG pipeline works beyond the Operating Systems lecture slides. The AI Papers document set was chunked into 260 paragraph chunks.
-
-```text
-Chroma collection: trustdoc_ai_papers_paragraph
-Evaluation file: eval/questions_ai_papers.jsonl
-```
-
-### Run Dense Baseline
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_retrieval.py \
-  --questions eval/questions_ai_papers.jsonl \
-  --collection trustdoc_ai_papers_paragraph \
-  --top_k 10
-```
-
-### Run Dense + Rerank
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_rerank.py \
-  --questions eval/questions_ai_papers.jsonl \
-  --collection trustdoc_ai_papers_paragraph \
-  --initial_top_k 10
-```
-
-### Run Hybrid
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_hybrid.py \
-  --questions eval/questions_ai_papers.jsonl \
-  --chunks data/processed/chunks_ai_papers_paragraph.json \
-  --collection trustdoc_ai_papers_paragraph \
-  --top_k 10 \
-  --dense_top_k 10 \
-  --bm25_top_k 10
-```
-
-### Run Hybrid + Rerank
-
-```bash
-PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
-  --questions eval/questions_ai_papers.jsonl \
-  --chunks data/processed/chunks_ai_papers_paragraph.json \
-  --collection trustdoc_ai_papers_paragraph \
-  --hybrid_top_k 10 \
-  --dense_top_k 10 \
-  --bm25_top_k 10
-```
-
-### AI Papers Result
-
-| Method | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
-|---|---:|---:|---:|---:|---:|
-| dense baseline | 0.6667 | 0.9167 | 1.0000 | 1.0000 | 0.7986 |
-| dense + rerank | 0.7500 | 0.9167 | 1.0000 | 1.0000 | 0.8403 |
-| hybrid | 0.6667 | 1.0000 | 1.0000 | 1.0000 | 0.8333 |
-| hybrid + rerank | 0.7500 | 1.0000 | 1.0000 | 1.0000 | 0.8611 |
-
-Dense retrieval already found correct evidence within top5/top10 for all questions. However, Hit@1 was only 0.6667, so top-rank quality was limited. CrossEncoder reranking improved Hit@1 and MRR.
-
-Hybrid retrieval improved Hit@3 to 1.0000, showing BM25 helps stabilize keyword-heavy paper retrieval. Hybrid + rerank achieved the best MRR of 0.8611. This suggests that for paper-style documents, combining keyword-based candidate generation with reranking is more reliable than dense retrieval alone.
-
-Compared with the OS document set, the AI Papers document set has a different structure and style. OS slides and AI papers are different document types, but both document sets showed that correct evidence usually appears in top-k candidates. The main challenge is ranking the best evidence at the top. Reranking and hybrid candidate generation help improve this ranking quality.
-
-### Section-aware Chunking Experiment
-
-Section-aware chunking is an experimental text-based chunking strategy for paper-style PDFs. It detects section headings such as `Abstract`, `Introduction`, `Related Work`, `Evaluation Strategies`, `Experiments`, `Conclusion`, `References`, and numbered headings. It adds `section_title` metadata to each chunk.
-
-The final cleaned section-aware AI Papers chunk file had 269 chunks.
-
-```text
-Chroma collection: trustdoc_ai_papers_section
-```
-
-The first version of heading detection incorrectly treated numbered list items and metric/table rows as section titles. The detector was refined to avoid single-number list items, decimal metric rows, and table/figure captions.
-
-Create section-aware chunks:
-
-```bash
-python app/ingest/batch_ingest.py \
+venv/bin/python app/ingest/batch_ingest.py \
+  --input_dir data/raw/OS \
+  --strategy paragraph \
+  --output data/processed/chunks_paragraph_all.json
+
+venv/bin/python app/ingest/batch_ingest.py \
+  --input_dir data/raw/OS \
+  --strategy fixed \
+  --output data/processed/chunks_fixed_all.json
+
+venv/bin/python app/ingest/batch_ingest.py \
+  --input_dir data/raw/ai_papers \
+  --strategy paragraph \
+  --output data/processed/chunks_ai_papers_paragraph.json
+
+venv/bin/python app/ingest/batch_ingest.py \
   --input_dir data/raw/ai_papers \
   --strategy section \
   --output data/processed/chunks_ai_papers_section.json
 ```
 
-Build section-aware Chroma index:
+### 3. Build Chroma indexes
+
+The chunk and collection names must match the selected benchmark config. Example:
 
 ```bash
-python app/retrieval/build_index.py \
-  --chunks data/processed/chunks_ai_papers_section.json \
-  --collection trustdoc_ai_papers_section
+venv/bin/python app/retrieval/build_index.py \
+  --chunks data/processed/chunks_paragraph_all.json \
+  --persist_dir data/chroma \
+  --collection trustdoc_os_paragraph
 ```
 
-Dense baseline evaluation:
+Repeat for `trustdoc_os_fixed`, `trustdoc_ai_papers_paragraph`, and `trustdoc_ai_papers_section` with their corresponding chunk files.
+
+### 4. Validate the frozen held-out set
+
+This validates schema, exact duplicates, PDF presence, and page bounds without running retrieval:
 
 ```bash
-PYTHONPATH=. python app/eval/evaluate_retrieval.py \
-  --questions eval/questions_ai_papers.jsonl \
-  --collection trustdoc_ai_papers_section \
-  --top_k 10
+PYTHONPATH=. venv/bin/python app/eval/validate_questions.py \
+  --heldout eval/questions_os_heldout.jsonl eval/questions_ai_papers_heldout.jsonl \
+  --dev eval/questions.jsonl eval/questions_ai_papers.jsonl \
+  --source-root data/raw
 ```
 
-Hybrid + rerank evaluation:
+### 5. Run the unified benchmark
+
+Development example:
 
 ```bash
-PYTHONPATH=. python app/eval/evaluate_hybrid_rerank.py \
-  --questions eval/questions_ai_papers.jsonl \
-  --chunks data/processed/chunks_ai_papers_section.json \
-  --collection trustdoc_ai_papers_section \
-  --hybrid_top_k 10 \
-  --dense_top_k 10 \
-  --bm25_top_k 10
+PYTHONPATH=. venv/bin/python app/eval/run_benchmark.py \
+  --config configs/benchmark_os_paragraph.json \
+  --bootstrap-resamples 10000 \
+  --seed 42
 ```
 
-| AI Papers Chunking | Method | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR |
-|---|---|---:|---:|---:|---:|---:|
-| paragraph | hybrid + rerank | 0.7500 | 1.0000 | 1.0000 | 1.0000 | 0.8611 |
-| section-aware | dense baseline | 0.5833 | 0.7500 | 0.8333 | 1.0000 | 0.6948 |
-| section-aware | hybrid + rerank | 0.8333 | 0.9167 | 0.9167 | 1.0000 | 0.8889 |
+Held-out example:
 
-Section-aware dense retrieval performed worse than paragraph dense retrieval. This suggests that simply adding section-aware chunking does not automatically improve semantic retrieval.
+```bash
+PYTHONPATH=. venv/bin/python app/eval/run_benchmark.py \
+  --config configs/benchmark_os_paragraph_heldout.json \
+  --bootstrap-resamples 10000 \
+  --seed 42 \
+  --output-root eval/results/heldout
+```
 
-However, section-aware + hybrid + rerank achieved the highest Hit@1 and MRR on AI Papers. The improvement suggests that section-aware chunks can be useful when combined with keyword-based candidate generation and CrossEncoder reranking. However, Hit@3 and Hit@5 decreased because one broad definition question had the correct source at rank 6. Therefore, section-aware chunking should be considered experimental rather than the default.
+Equivalent configs exist for OS fixed, AI paragraph, and AI section-aware. Each run writes `summary.json`, `summary.md`, `summary.csv`, and `per_query.json` under its output directory.
 
----
+### 6. Run paired comparisons
 
-## Key Findings
+```bash
+PYTHONPATH=. venv/bin/python app/eval/compare_methods.py \
+  --artifact os_paragraph=eval/results/heldout/os_paragraph/per_query.json \
+  --artifact os_fixed=eval/results/heldout/os_fixed/per_query.json \
+  --artifact ai_papers_paragraph=eval/results/heldout/ai_papers_paragraph/per_query.json \
+  --artifact ai_papers_section=eval/results/heldout/ai_papers_section/per_query.json \
+  --chunking-pair os_chunking=os_paragraph:os_fixed \
+  --chunking-pair ai_chunking=ai_papers_paragraph:ai_papers_section \
+  --resamples 10000 \
+  --seed 42 \
+  --confidence 0.95 \
+  --output-dir eval/analysis/heldout
+```
 
-- 작은 평가셋만으로 chunking 전략의 우열을 판단하면 위험합니다.
-- 초기 5개 질문 평가에서는 paragraph chunking이 더 좋아 보였지만, 20개 질문으로 확장하자 fixed-size chunking이 baseline 기준 Hit@1과 MRR에서 더 좋은 결과를 보였습니다.
-- 두 baseline 방식 모두 Hit@10은 1.0000으로, 정답 근거를 top10 안에는 모두 포함했습니다.
-- 따라서 현재 문제는 검색 실패보다는 ranking 품질 개선 문제에 가깝습니다.
-- CrossEncoder reranking을 적용하자 Hit@3, Hit@5가 모두 1.0000으로 개선되었습니다.
-- Hybrid Retrieval 단독은 일부 키워드형 질문에는 도움이 되었지만, 전체적으로 안정적인 성능 개선을 만들지는 못했습니다.
-- BM25는 정확한 용어가 중요한 질문에서는 유리했지만, 반복 키워드가 많은 개념형 질문에서는 순위를 흐릴 수 있었습니다.
-- Hybrid Retrieval을 최종 ranking 전략으로 쓰기보다는, reranker 앞단의 candidate generation 단계로 활용하는 편이 더 안정적이었습니다.
-- 최종 실험에서는 paragraph + hybrid + rerank 조합이 가장 높은 MRR을 보였습니다.
-- RAG에서는 chunking 전략을 embedding retrieval 성능만으로 판단하기보다, candidate generation, reranking까지 포함한 최종 retrieval pipeline 기준으로 평가해야 합니다.
+### 7. Validate and summarize manual error annotations
 
----
+```bash
+PYTHONPATH=. venv/bin/python app/eval/summarize_error_analysis.py \
+  --annotations eval/analysis/error_analysis/manual_case_annotations.json \
+  --output-dir eval/analysis/error_analysis
+```
+
+### 8. Run the API and UI
+
+```bash
+PYTHONPATH=. venv/bin/python -m uvicorn app.api.main:app --reload
+```
+
+In another terminal:
+
+```bash
+venv/bin/streamlit run app/ui/streamlit_app.py
+```
+
+- API documentation: `http://127.0.0.1:8000/docs`
+- Streamlit: `http://localhost:8501`
 
 ## Limitations
 
-- 평가 질문이 20개로 아직 작습니다.
-- 운영체제 강의자료 PDF에 한정된 실험입니다.
-- OCR, Table OCR, Layout-aware parsing은 아직 구현하지 않았습니다.
-- Reranker는 성능을 개선하지만, embedding search보다 느립니다.
-- Hybrid Retrieval의 RRF 파라미터와 top-k 설정을 충분히 튜닝하지 않았습니다.
-- 현재 BM25 tokenization은 간단한 regex 기반이며, 한국어 형태소 분석은 적용하지 않았습니다.
-- Streamlit UI는 로컬 데모용이며, production deployment는 아직 고려하지 않았습니다.
-- LLM 답변 품질에 대한 자동 평가는 아직 포함하지 않았습니다.
-
----
+- The development set has 32 queries and the held-out set has 35; both remain relatively small.
+- Percentile paired-bootstrap intervals remain sensitive to the number and composition of queries.
+- The document domains are limited to OS lecture slides and three RAG-related papers.
+- Manual error analysis is a purposive 28-case sample, not an unbiased failure-distribution estimate.
+- Page-level evidence metrics do not fully measure whether all evidence needed for a multi-page answer was jointly retrieved.
+- PDF processing is text-based; no OCR or learned layout model is used.
+- Section detection is heuristic, and tables or extracted text order can create malformed boundaries.
+- BM25 uses simple regex tokenization rather than a language-specific analyzer.
+- Latency measurements are specific to the local hardware, runtime, cache state, corpus, and index.
+- Generation quality, answer faithfulness, and citation completeness have not been systematically evaluated.
 
 ## Future Work
 
-- 평가 질문 30~50개 이상으로 확장
-- Query expansion 실험
-- BM25 tokenization 개선
-- RRF 파라미터 및 dense/BM25 candidate top-k 튜닝
-- OCR / Table OCR / Layout-aware chunking 적용
-- RAG 답변 품질 평가 추가
-- 파일 업로드 기반 ingestion API 추가
-- FastAPI deployment 구조 개선
-- Streamlit UI 개선 및 데모 시나리오 추가
+### Evaluation
 
----
+- Expand the held-out corpus and query set.
+- Reassess interval robustness with more paired queries.
+- Add answer-level faithfulness, citation correctness, and multi-page evidence-sufficiency evaluation.
 
-## Current Status
+### Retrieval
 
-현재 구현된 범위:
+- Explore query-adaptive lexical/semantic fusion.
+- Use the observed error taxonomy to design more selective reranking strategies.
 
-```text
-PDF Parsing
-Chunking
-Embedding
-Chroma Indexing
-Dense Retrieval
-BM25 Hybrid Retrieval
-RRF Fusion
-CrossEncoder Reranking
-Retrieval Evaluation
-Hybrid + Rerank Evaluation
-Multi-document-set Evaluation
-AI Papers Evaluation Set
-Section-aware Chunking
-Section-aware Chunking Evaluation
-Evaluation Report Export
-Weak-case Analysis
-Gemini RAG Answer Generation
-Source Citation
-FastAPI Serving
-Retrieval-only API
-RAG Query API
-Streamlit Demo UI
-Swagger UI
-```
+### Document Processing
 
-TrustDoc RAG는 현재 문서 기반 RAG MVP에서 한 단계 더 나아가, chunking 전략, dense retrieval, keyword retrieval, reranking, hybrid candidate generation을 정량 평가하고 API/UI로 시연할 수 있는 실험형 RAG 프로젝트입니다.
+- Add layout-aware and table-aware parsing.
+- Apply OCR only to documents or pages that require it.
+
+The current retrieval experiments are treated as the final project result; future work should begin from the frozen benchmark and documented failure modes rather than tuning the existing held-out queries.
