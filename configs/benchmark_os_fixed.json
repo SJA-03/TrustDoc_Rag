@@ -1,0 +1,17 @@
+{
+  "name": "os_fixed",
+  "questions": "eval/questions.jsonl",
+  "chunks": "data/processed/chunks_fixed_all.json",
+  "collection": "trustdoc_os_fixed",
+  "methods": [
+    "dense",
+    "bm25",
+    "dense_rerank",
+    "hybrid",
+    "hybrid_rerank"
+  ],
+  "top_k": 10,
+  "dense_top_k": 10,
+  "bm25_top_k": 10,
+  "rerank_top_k": 10
+}

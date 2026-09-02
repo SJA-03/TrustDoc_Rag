@@ -1,0 +1,18 @@
+{
+  "name": "os_paragraph",
+  "dataset_commit": "ea47aa516a77a998aee5430f7daceb8c3ac07e75",
+  "questions": "eval/questions_os_heldout.jsonl",
+  "chunks": "data/processed/chunks_paragraph_all.json",
+  "collection": "trustdoc_os_paragraph",
+  "methods": [
+    "dense",
+    "bm25",
+    "dense_rerank",
+    "hybrid",
+    "hybrid_rerank"
+  ],
+  "top_k": 10,
+  "dense_top_k": 10,
+  "bm25_top_k": 10,
+  "rerank_top_k": 10
+}
