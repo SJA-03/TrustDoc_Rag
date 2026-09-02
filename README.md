@@ -728,6 +728,16 @@ PYTHONPATH=. python app/eval/compare_methods.py \
 
 출력은 `paired_comparisons.json`, `paired_comparisons.md`, `query_pair_outcomes.json`입니다. Bootstrap의 positive/zero/negative 값은 paired resample에서 관측된 delta 방향의 비율이며 Bayesian posterior probability나 formal p-value가 아닙니다. Error-analysis candidate는 query별 reciprocal-rank 변화만으로 수집하며 원인을 자동 분류하지 않습니다.
 
+### Held-out Error Analysis
+
+`summarize_error_analysis.py`는 원본 PDF와 retrieved candidate를 수동 검수한 annotation의 2-axis taxonomy를 검증하고, descriptive count와 cross-tab을 JSON/Markdown으로 생성합니다. 수동 label은 자동 추론하지 않으며 `eval/analysis/error_analysis/`의 로컬 artifact는 Git에 포함하지 않습니다.
+
+```bash
+PYTHONPATH=. python app/eval/summarize_error_analysis.py \
+  --annotations eval/analysis/error_analysis/manual_case_annotations.json \
+  --output-dir eval/analysis/error_analysis
+```
+
 ### Evaluation Reporting & Error Analysis
 
 초기 evaluation script는 Hit@k, MRR, detailed results를 terminal에 출력하는 방식이었습니다. 이제 `evaluate_hybrid_rerank.py`는 evaluation 결과를 JSON과 Markdown으로 저장할 수 있습니다. 이를 통해 실험 재현성과 weak-case 분석이 쉬워집니다.
